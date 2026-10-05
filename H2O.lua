@@ -13,7 +13,7 @@ local TextChatService = game:GetService("TextChatService")
 
 local h2o = {
         Name = "h2o",
-        Version = "1.4.0",
+        Version = "1.4.1",
         Author = "h2o",
         Toggles = {},
         Options = {},
@@ -8965,6 +8965,646 @@ do
                         end)
                 end
                 table.clear(tb.deflecting)
+        end)
+end
+
+do
+        local WeaponGroup = h2o.Tabs.combat:AddRightGroupbox("weapon modifiers", "swords")
+
+        local wstate = {
+                enabled = false,
+                installed = false,
+                warned = false,
+                noSpread = false,
+                fastShoot = false,
+                fastProjectile = false,
+                fullAuto = false,
+                alwaysBackstab = false,
+                grenadeOptions = {},
+                fireRate = 100,
+                cameraLoopId = 0,
+                infoCache = setmetatable({}, { __mode = "k" }),
+                projectileCache = setmetatable({}, { __mode = "k" }),
+                fullAutoItems = setmetatable({}, { __mode = "k" }),
+                clientItem = nil,
+                gunItem = nil,
+                meleeItem = nil,
+                grenadeItem = nil,
+                knifeItem = nil,
+                utility = nil,
+                cameraController = nil,
+                enums = nil,
+                updateCameraRotation = nil,
+                originalInput = nil,
+                originalGunStartShooting = nil,
+                originalMeleeStartShooting = nil,
+                originalGrenadeFinishShooting = nil,
+                originalGrenadeFinishAiming = nil,
+                originalKnifeStartAiming = nil,
+        }
+
+        local function loadModule(node)
+                if not node then
+                        return nil
+                end
+                local ok, result = pcall(require, node)
+                if ok and type(result) == "table" then
+                        return result
+                end
+                return nil
+        end
+
+        local function safeIndex(target, key)
+                if type(target) ~= "table" then
+                        return nil
+                end
+                local ok, value = pcall(function()
+                        return target[key]
+                end)
+                if ok then
+                        return value
+                end
+                return nil
+        end
+
+        local function stopBackstabLoop(loopId)
+                if wstate.cameraLoopId == loopId then
+                        wstate.cameraLoopId = wstate.cameraLoopId + 1
+                end
+        end
+
+        local function startBackstabLoop(duration)
+                if not (wstate.utility and wstate.cameraController and wstate.updateCameraRotation) then
+                        return
+                end
+                wstate.cameraLoopId = wstate.cameraLoopId + 1
+                local loopId = wstate.cameraLoopId
+                local sideAngle = math.rad(180)
+                task.spawn(function()
+                        while wstate.cameraLoopId == loopId
+                                and wstate.enabled
+                                and wstate.alwaysBackstab do
+                                local rotation = safeIndex(wstate.cameraController, "Rotation")
+                                local yaw = rotation and rotation.Y or 0
+                                local encoded = nil
+                                pcall(function()
+                                        encoded = wstate.utility:EncodeCameraRotation(Vector2.new(0, yaw + sideAngle))
+                                end)
+                                if encoded then
+                                        pcall(function()
+                                                wstate.updateCameraRotation:FireServer(encoded, nil)
+                                        end)
+                                end
+                                task.wait()
+                        end
+                end)
+                task.delay(duration or 0.35, function()
+                        stopBackstabLoop(loopId)
+                end)
+        end
+
+        local function optionEnabled(name)
+                local choices = wstate.grenadeOptions
+                if type(choices) ~= "table" then
+                        return false
+                end
+                if choices[name] == true then
+                        return true
+                end
+                for _, value in pairs(choices) do
+                        if value == name then
+                                return true
+                        end
+                end
+                return false
+        end
+
+        local function hasInfoOptions()
+                return wstate.fastShoot or wstate.fireRate ~= 100
+        end
+
+        local function rememberInfo(info, key)
+                if type(info) ~= "table" or info[key] == nil then
+                        return nil
+                end
+                local cache = wstate.infoCache[info]
+                if not cache then
+                        cache = {}
+                        wstate.infoCache[info] = cache
+                end
+                if cache[key] == nil then
+                        cache[key] = info[key]
+                end
+                return cache[key]
+        end
+
+        local function applyInfoOptions(item)
+                local info = item and item.Info
+                if type(info) ~= "table" then
+                        return
+                end
+                local fireRate = math.max((wstate.fireRate or 100) / 100, 0.01)
+                local fastShoot = wstate.enabled and wstate.fastShoot
+                local recoil = rememberInfo(info, "ShootRecoil")
+                if recoil ~= nil then
+                        info.ShootRecoil = fastShoot and 0 or recoil
+                end
+                local spread = rememberInfo(info, "ShootSpread")
+                if spread ~= nil then
+                        info.ShootSpread = fastShoot and 0 or spread
+                end
+                local projectileSpeed = rememberInfo(info, "ProjectileSpeed")
+                if projectileSpeed ~= nil and fastShoot then
+                        info.ProjectileSpeed = 99999999
+                elseif projectileSpeed ~= nil then
+                        info.ProjectileSpeed = projectileSpeed
+                end
+                for _, key in ipairs({
+                        "ShootCooldown",
+                        "QuickShotCooldown",
+                        "SpinCooldown",
+                        "DashCooldown",
+                        "Cooldown",
+                        "BuildCooldown",
+                        "AttackCooldown",
+                        "HeavyAttackCooldown",
+                        "BurstCooldown",
+                }) do
+                        local original = rememberInfo(info, key)
+                        if original ~= nil then
+                                if fastShoot then
+                                        info[key] = 0
+                                elseif fireRate ~= 1 and (key == "ShootCooldown" or key == "QuickShotCooldown" or key == "BurstCooldown" or key == "AttackCooldown") then
+                                        info[key] = original / fireRate
+                                else
+                                        info[key] = original
+                                end
+                        end
+                end
+        end
+
+        local function refreshCachedInfo()
+                for info in pairs(wstate.infoCache) do
+                        pcall(applyInfoOptions, { Info = info })
+                end
+        end
+
+        local function restoreInfo()
+                for info, values in pairs(wstate.infoCache) do
+                        if type(info) == "table" then
+                                for key, value in pairs(values) do
+                                        pcall(function()
+                                                info[key] = value
+                                        end)
+                                end
+                        end
+                end
+        end
+
+        local function restoreFastProjectile()
+                for item, reloadLength in pairs(wstate.projectileCache) do
+                        if type(item) == "table" then
+                                pcall(function()
+                                        rawset(item, "ReloadLength", reloadLength)
+                                end)
+                        end
+                end
+        end
+
+        local function applyFastProjectile()
+                if not (wstate.enabled and wstate.fastProjectile) then
+                        restoreFastProjectile()
+                        return
+                end
+                pcall(function()
+                        local itemLibrary = loadModule(game:GetService("ReplicatedStorage").Modules:FindFirstChild("ItemLibrary"))
+                        local items = itemLibrary and safeIndex(itemLibrary, "Items")
+                        if type(items) ~= "table" then
+                                return
+                        end
+                        local whitelist = { "Bow", "Daggers", "Slingshot" }
+                        for _, item in items do
+                                if type(item) == "table" then
+                                        local name = safeIndex(item, "Name")
+                                        if name ~= nil and table.find(whitelist, name) and rawget(item, "ReloadLength") ~= nil then
+                                                if wstate.projectileCache[item] == nil then
+                                                        wstate.projectileCache[item] = rawget(item, "ReloadLength")
+                                                end
+                                                rawset(item, "ReloadLength", name == "Daggers" and 0.09 or 0)
+                                        end
+                                end
+                        end
+                end)
+        end
+
+        local function isLocalItem(item)
+                local fighter = item and item.ClientFighter
+                if not fighter then
+                        return false
+                end
+                if fighter.IsLocalPlayer == true then
+                        return true
+                end
+                return fighter.Player == LocalPlayer
+        end
+
+        local function actionName(item, action)
+                local name = tostring(action)
+                pcall(function()
+                        if item and type(item.FromEnum) == "function" then
+                                name = tostring(item:FromEnum(action))
+                        elseif wstate.enums and type(wstate.enums.FromEnum) == "function" then
+                                name = tostring(wstate.enums:FromEnum(action))
+                        end
+                end)
+                return name
+        end
+
+        local function isThrowableItem(item)
+                local info = item and item.Info
+                if type(info) ~= "table" then
+                        return false
+                end
+                return info.DetonateDelay ~= nil
+                        or info.ThrowForceMin ~= nil
+                        or info.LobForceMin ~= nil
+        end
+
+        local function estimateImpactFuse(item, action, cameraCFrame, charge)
+                if typeof(cameraCFrame) ~= "CFrame" or type(item) ~= "table" then
+                        return nil
+                end
+                local ok, result = pcall(function()
+                        local info = item.Info
+                        if type(info) ~= "table" then
+                                return nil
+                        end
+                        local name = actionName(item, action)
+                        local isLob = name == "FinishAiming"
+                        local minForce = isLob and info.LobForceMin or info.ThrowForceMin
+                        local maxForce = isLob and info.LobForceMax or info.ThrowForceMax
+                        local gravity = isLob and info.LobGravity or info.ThrowGravity
+                        if type(minForce) ~= "number" or type(maxForce) ~= "number" then
+                                return nil
+                        end
+                        local power = math.clamp(tonumber(charge) or 1, 0, 1)
+                        local speed = minForce + (maxForce - minForce) * power
+                        local velocity = cameraCFrame.LookVector * speed
+                        local position = cameraCFrame.Position
+                        local rayParams = RaycastParams.new()
+                        rayParams.FilterType = Enum.RaycastFilterType.Exclude
+                        local exclude = {}
+                        if LocalPlayer.Character then
+                                table.insert(exclude, LocalPlayer.Character)
+                        end
+                        local viewModels = workspace:FindFirstChild("ViewModels")
+                        if viewModels then
+                                table.insert(exclude, viewModels)
+                        end
+                        rayParams.FilterDescendantsInstances = exclude
+                        local last = position
+                        local grav = Vector3.new(0, -(gravity or workspace.Gravity), 0)
+                        for t = 0.03, 5, 0.03 do
+                                local nextPos = position + velocity * t + grav * (0.5 * t * t)
+                                local hit = workspace:Raycast(last, nextPos - last, rayParams)
+                                if hit then
+                                        return math.max(t - 0.015, 0)
+                                end
+                                last = nextPos
+                        end
+                        return nil
+                end)
+                return ok and result or nil
+        end
+
+        local function getFullAutoDelay(item)
+                local stamp = safeIndex(item, "_shoot_cooldown")
+                local remaining = type(stamp) == "number" and math.max(stamp - tick(), 0) or 0
+                if remaining > 0 then
+                        return math.clamp(remaining, 0.01, 1)
+                end
+                local info = safeIndex(item, "Info")
+                local cooldown = 0
+                if type(info) == "table" then
+                        cooldown = tonumber(info.ShootCooldown) or 0
+                        local burstCount = tonumber(info.BurstCount)
+                        if burstCount and burstCount > 1 then
+                                cooldown = tonumber(info.BurstCooldown) or cooldown
+                        end
+                end
+                return math.clamp(cooldown > 0 and cooldown or (1 / 60), 1 / 60, 1)
+        end
+
+        local function startFullAuto(item, input)
+                if wstate.fullAutoItems[item] then
+                        return
+                end
+                wstate.fullAutoItems[item] = true
+                task.spawn(function()
+                        while wstate.enabled
+                                and wstate.fullAuto
+                                and item
+                                and isLocalItem(item)
+                                and UserInputService:IsMouseButtonPressed(Enum.UserInputType.MouseButton1) do
+                                task.wait(getFullAutoDelay(item))
+                                if not (wstate.enabled
+                                        and wstate.fullAuto
+                                        and isLocalItem(item)
+                                        and UserInputService:IsMouseButtonPressed(Enum.UserInputType.MouseButton1)) then
+                                        break
+                                end
+                                pcall(function()
+                                        wstate.originalInput(item, input)
+                                end)
+                        end
+                        wstate.fullAutoItems[item] = nil
+                end)
+        end
+
+        local function applyGrenadeResult(self, result)
+                if not (wstate.enabled and isLocalItem(self) and isThrowableItem(self) and result[1]) then
+                        return
+                end
+                local action = result[2]
+                if action ~= "FinishShooting" and action ~= "FinishAiming" then
+                        return
+                end
+                if optionEnabled("Explode On Throw") then
+                        result[5] = 0.15
+                elseif optionEnabled("Explode On Impact") then
+                        result[5] = estimateImpactFuse(self, action, result[3], result[4]) or result[5]
+                elseif optionEnabled("Remove Fuse") then
+                        result[5] = 999999
+                end
+        end
+
+        local function installHooks()
+                if wstate.installed then
+                        return true
+                end
+                local gathered = false
+                pcall(function()
+                        local playerScripts = LocalPlayer:FindFirstChild("PlayerScripts") or LocalPlayer:WaitForChild("PlayerScripts", 10)
+                        if not playerScripts then
+                                return
+                        end
+                        local modules = playerScripts:FindFirstChild("Modules") or playerScripts:WaitForChild("Modules", 10)
+                        if not modules then
+                                return
+                        end
+                        local itemTypes = modules:FindFirstChild("ItemTypes") or modules:WaitForChild("ItemTypes", 10)
+                        local clientClasses = modules:FindFirstChild("ClientReplicatedClasses")
+                        local clientFighter = clientClasses and clientClasses:FindFirstChild("ClientFighter")
+                        local itemsFolder = modules:FindFirstChild("Items")
+                        local controllers = playerScripts:FindFirstChild("Controllers")
+                        local repModules = game:GetService("ReplicatedStorage"):FindFirstChild("Modules")
+                        wstate.clientItem = loadModule(clientFighter and clientFighter:FindFirstChild("ClientItem"))
+                        wstate.gunItem = itemTypes and loadModule(itemTypes:FindFirstChild("Gun"))
+                        wstate.grenadeItem = itemTypes and (loadModule(itemTypes:FindFirstChild("Throwable")) or loadModule(itemTypes:FindFirstChild("Grenade")))
+                        wstate.meleeItem = itemTypes and (loadModule(itemTypes:FindFirstChild("Melee")) or loadModule(itemTypes:FindFirstChild("Knife")))
+                        wstate.knifeItem = itemsFolder and loadModule(itemsFolder:FindFirstChild("Knife"))
+                        wstate.utility = loadModule(repModules and repModules:FindFirstChild("Utility"))
+                        wstate.cameraController = loadModule(controllers and controllers:FindFirstChild("CameraController"))
+                        wstate.enums = loadModule(repModules and repModules:FindFirstChild("EnumLibrary"))
+                        wstate.updateCameraRotation = remote("Remotes", "Replication", "Fighter", "UpdateCameraRotation")
+                        gathered = true
+                end)
+                if not gathered or not wstate.clientItem then
+                        return false
+                end
+                if wstate.originalInput == nil then
+                        local original = wstate.clientItem.Input
+                        if type(original) == "function" then
+                                wstate.originalInput = original
+                                wstate.clientItem.Input = function(self, input, ...)
+                                        pcall(function()
+                                                if hasInfoOptions() and isLocalItem(self) then
+                                                        applyInfoOptions(self)
+                                                end
+                                        end)
+                                        local result = table.pack(original(self, input, ...))
+                                        pcall(function()
+                                                if wstate.enabled and wstate.fullAuto and input == "StartShooting" and isLocalItem(self) then
+                                                        startFullAuto(self, input)
+                                                end
+                                        end)
+                                        return table.unpack(result, 1, result.n)
+                                end
+                        end
+                end
+                if wstate.gunItem and wstate.originalGunStartShooting == nil then
+                        local original = wstate.gunItem.StartShooting
+                        if type(original) == "function" then
+                                wstate.originalGunStartShooting = original
+                                wstate.gunItem.StartShooting = function(self, ...)
+                                        pcall(function()
+                                                if hasInfoOptions() and isLocalItem(self) then
+                                                        applyInfoOptions(self)
+                                                end
+                                        end)
+                                        local result = table.pack(original(self, ...))
+                                        pcall(function()
+                                                if wstate.enabled and wstate.noSpread and isLocalItem(self) and typeof(result[3]) == "table" then
+                                                        result[4] = true
+                                                end
+                                        end)
+                                        return table.unpack(result, 1, result.n)
+                                end
+                        end
+                end
+                if wstate.meleeItem and wstate.originalMeleeStartShooting == nil then
+                        local original = wstate.meleeItem.StartShooting
+                        if type(original) == "function" then
+                                wstate.originalMeleeStartShooting = original
+                                wstate.meleeItem.StartShooting = function(self, ...)
+                                        pcall(function()
+                                                if hasInfoOptions() and isLocalItem(self) then
+                                                        applyInfoOptions(self)
+                                                end
+                                        end)
+                                        return original(self, ...)
+                                end
+                        end
+                end
+                if wstate.grenadeItem and wstate.originalGrenadeFinishShooting == nil then
+                        local original = wstate.grenadeItem.FinishShooting
+                        if type(original) == "function" then
+                                wstate.originalGrenadeFinishShooting = original
+                                wstate.grenadeItem.FinishShooting = function(self, ...)
+                                        local result = table.pack(original(self, ...))
+                                        pcall(function()
+                                                applyGrenadeResult(self, result)
+                                        end)
+                                        return table.unpack(result, 1, result.n)
+                                end
+                        end
+                end
+                if wstate.grenadeItem and wstate.originalGrenadeFinishAiming == nil then
+                        local original = wstate.grenadeItem.FinishAiming
+                        if type(original) == "function" then
+                                wstate.originalGrenadeFinishAiming = original
+                                wstate.grenadeItem.FinishAiming = function(self, ...)
+                                        local result = table.pack(original(self, ...))
+                                        pcall(function()
+                                                applyGrenadeResult(self, result)
+                                        end)
+                                        return table.unpack(result, 1, result.n)
+                                end
+                        end
+                end
+                if wstate.knifeItem and wstate.originalKnifeStartAiming == nil then
+                        local original = wstate.knifeItem.StartAiming
+                        if type(original) == "function" then
+                                wstate.originalKnifeStartAiming = original
+                                wstate.knifeItem.StartAiming = function(self, ...)
+                                        pcall(function()
+                                                if hasInfoOptions() and isLocalItem(self) then
+                                                        applyInfoOptions(self)
+                                                end
+                                        end)
+                                        pcall(function()
+                                                if wstate.enabled and wstate.alwaysBackstab and isLocalItem(self) then
+                                                        local duration = 0.35
+                                                        local info = safeIndex(self, "Info")
+                                                        local attackDelay = type(info) == "table" and info.AttackDelay or nil
+                                                        if type(attackDelay) == "number" then
+                                                                duration = math.max(attackDelay, 0.35)
+                                                        end
+                                                        startBackstabLoop(duration)
+                                                end
+                                        end)
+                                        return original(self, ...)
+                                end
+                        end
+                end
+                wstate.installed = true
+                return true
+        end
+
+        local function unhookAll()
+                pcall(function()
+                        if wstate.clientItem and wstate.originalInput then
+                                wstate.clientItem.Input = wstate.originalInput
+                        end
+                        if wstate.gunItem and wstate.originalGunStartShooting then
+                                wstate.gunItem.StartShooting = wstate.originalGunStartShooting
+                        end
+                        if wstate.meleeItem and wstate.originalMeleeStartShooting then
+                                wstate.meleeItem.StartShooting = wstate.originalMeleeStartShooting
+                        end
+                        if wstate.grenadeItem and wstate.originalGrenadeFinishShooting then
+                                wstate.grenadeItem.FinishShooting = wstate.originalGrenadeFinishShooting
+                        end
+                        if wstate.grenadeItem and wstate.originalGrenadeFinishAiming then
+                                wstate.grenadeItem.FinishAiming = wstate.originalGrenadeFinishAiming
+                        end
+                        if wstate.knifeItem and wstate.originalKnifeStartAiming then
+                                wstate.knifeItem.StartAiming = wstate.originalKnifeStartAiming
+                        end
+                end)
+        end
+
+        WeaponGroup:AddToggle("weapons_no_spread", {
+                Text = "no spread",
+                Default = false,
+                Tooltip = "shots leave the barrel dead straight - removes the random spread cone",
+        })
+        WeaponGroup:AddToggle("weapons_fast_shoot", {
+                Text = "fastshoot",
+                Default = false,
+                Tooltip = "zeroes recoil, spread and every shoot cooldown - the client fires as fast as the game allows",
+        })
+        WeaponGroup:AddToggle("weapons_fast_projectile", {
+                Text = "fast projectile",
+                Default = false,
+                Tooltip = "removes the reload delay on bow, daggers and slingshot projectiles",
+        })
+        WeaponGroup:AddToggle("weapons_full_auto", {
+                Text = "full auto",
+                Default = false,
+                Tooltip = "holding the mouse keeps firing semi-auto weapons automatically",
+        })
+        WeaponGroup:AddToggle("weapons_backstab", {
+                Text = "always backstab",
+                Default = false,
+                Tooltip = "reports your camera behind the target while aiming a knife so every swing registers as a backstab",
+        })
+        WeaponGroup:AddDivider()
+        WeaponGroup:AddDropdown("weapons_grenade", {
+                Values = { "Explode On Impact", "Explode On Throw", "Remove Fuse" },
+                Default = {},
+                Multi = true,
+                Text = "grenade options",
+                Tooltip = "explode on throw detonates 0.15s after release - explode on impact simulates the throw arc and detonates on first surface hit - remove fuse makes the grenade never detonate",
+        })
+        WeaponGroup:AddSlider("weapons_fire_rate", {
+                Text = "fire rate",
+                Min = 1,
+                Max = 100,
+                Default = 100,
+                Rounding = 0,
+                Suffix = "%",
+                Tooltip = "divides shoot cooldowns - 50% fires twice as fast",
+        })
+
+        local function updateState()
+                wstate.noSpread = Toggles.weapons_no_spread.Value == true
+                wstate.fastShoot = Toggles.weapons_fast_shoot.Value == true
+                wstate.fastProjectile = Toggles.weapons_fast_projectile.Value == true
+                wstate.fullAuto = Toggles.weapons_full_auto.Value == true
+                wstate.alwaysBackstab = Toggles.weapons_backstab.Value == true
+                wstate.grenadeOptions = (Options.weapons_grenade and Options.weapons_grenade.Value) or {}
+                wstate.fireRate = (Options.weapons_fire_rate and Options.weapons_fire_rate.Value) or 100
+                local anyOn = wstate.noSpread
+                        or wstate.fastShoot
+                        or wstate.fastProjectile
+                        or wstate.fullAuto
+                        or wstate.alwaysBackstab
+                if not anyOn and type(wstate.grenadeOptions) == "table" and next(wstate.grenadeOptions) ~= nil then
+                        anyOn = true
+                end
+                if not anyOn and wstate.fireRate ~= 100 then
+                        anyOn = true
+                end
+                if anyOn then
+                        local ok, installed = pcall(installHooks)
+                        if not ok or not installed then
+                                wstate.enabled = false
+                                pcall(restoreInfo)
+                                pcall(restoreFastProjectile)
+                                if not wstate.warned then
+                                        wstate.warned = true
+                                        notify("weapon modifiers - game modules unavailable", 6)
+                                end
+                                return
+                        end
+                        wstate.warned = false
+                        wstate.enabled = true
+                        pcall(refreshCachedInfo)
+                        pcall(applyFastProjectile)
+                else
+                        wstate.enabled = false
+                        wstate.cameraLoopId = wstate.cameraLoopId + 1
+                        pcall(restoreInfo)
+                        pcall(restoreFastProjectile)
+                end
+        end
+
+        for _, id in ipairs({ "weapons_no_spread", "weapons_fast_shoot", "weapons_fast_projectile", "weapons_full_auto", "weapons_backstab" }) do
+                Toggles[id]:OnChanged(updateState)
+        end
+        Options.weapons_grenade:OnChanged(updateState)
+        Options.weapons_fire_rate:OnChanged(updateState)
+
+        maid(function()
+                wstate.enabled = false
+                wstate.cameraLoopId = wstate.cameraLoopId + 1
+                pcall(restoreInfo)
+                pcall(restoreFastProjectile)
+                pcall(unhookAll)
+                table.clear(wstate.fullAutoItems)
+                table.clear(wstate.infoCache)
+                table.clear(wstate.projectileCache)
         end)
 end
 
