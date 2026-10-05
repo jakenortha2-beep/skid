@@ -13,7 +13,7 @@ local TextChatService = game:GetService("TextChatService")
 
 local h2o = {
         Name = "h2o",
-        Version = "1.2.2",
+        Version = "1.2.3",
         Author = "h2o",
         DefaultSourceUrl = "https://raw.githubusercontent.com/jakenortha2-beep/skid/main/H2O.lua",
         Toggles = {},
@@ -39,21 +39,52 @@ do
         h2o.QueueTeleport = queueTeleportFn and function(code)
                 pcall(queueTeleportFn, code)
         end or nil
-        pcall(function()
+        h2o.FolderOk = false
+        local function ensureH2oFolders()
                 if not makeFolderFn then
-                        return
+                        h2o.FolderErr = "makefolder unavailable"
+                        return false
                 end
-                if isFolderFn then
-                        if not isFolderFn("h2o") then
+                local ok, err = pcall(function()
+                        if isFolderFn then
+                                if not isFolderFn("h2o") then
+                                        makeFolderFn("h2o")
+                                end
+                                if not isFolderFn("h2o/main") then
+                                        makeFolderFn("h2o/main")
+                                end
+                        else
                                 makeFolderFn("h2o")
-                        end
-                        if not isFolderFn("h2o/main") then
                                 makeFolderFn("h2o/main")
                         end
-                else
-                        makeFolderFn("h2o/main")
+                end)
+                if ok and isFolderFn then
+                        ok = isFolderFn("h2o") and isFolderFn("h2o/main")
+                        if not ok then
+                                err = "h2o/main still missing after makefolder"
+                        end
                 end
-        end)
+                h2o.FolderOk = ok == true
+                h2o.FolderErr = ok and "" or tostring(err or "unknown")
+                return ok == true
+        end
+        pcall(ensureH2oFolders)
+        local function verifiedWrite(file, content)
+                if not writeFileFn then
+                        return false, "writefile unavailable"
+                end
+                local ok, err = pcall(writeFileFn, file, content)
+                if ok and isFileFn and not isFileFn(file) then
+                        ok, err = false, "file missing after write"
+                end
+                if not ok and ensureH2oFolders() then
+                        ok, err = pcall(writeFileFn, file, content)
+                        if ok and isFileFn and not isFileFn(file) then
+                                ok, err = false, "file missing after retry"
+                        end
+                end
+                return ok == true, tostring(err or "")
+        end
         pcall(function()
                 if not readFileFn then
                         return
@@ -115,13 +146,12 @@ do
                 end)
                 for _, sc in ipairs(candidates) do
                         pcall(function()
-                                if h2o.SourceCached or not writeFileFn then
+                                if h2o.SourceCached then
                                         return
                                 end
                                 local src = sc.Source
                                 if type(src) == "string" and #src > 1000 and src:find(sourceSignature, 1, true) then
-                                        writeFileFn(sourceSignature, src)
-                                        h2o.SourceCached = true
+                                        h2o.SourceCached = verifiedWrite(sourceSignature, src)
                                 end
                         end)
                         if h2o.SourceCached then
@@ -133,27 +163,25 @@ do
         h2o.CaptureSource = captureSource
         captureSource()
         local function saveStartupState()
-                if not writeFileFn then
-                        return
-                end
-                pcall(function()
-                        writeFileFn("h2o/main/startup.json", HttpService:JSONEncode(startupState))
-                end)
+                local ok, err = verifiedWrite("h2o/main/startup.json", HttpService:JSONEncode(startupState))
+                h2o.StartupSaveOk = ok
+                h2o.StartupSaveErr = err
+                return ok
         end
         h2o.SaveStartupState = saveStartupState
         local function buildRerunBootstrap()
                 local parts = {}
-                table.insert(parts, "local function _lg(s) pcall(function() if writefile then writefile('h2o/main/rerun_log.txt', s) end end) end")
-                table.insert(parts, "local g=0 pcall(function() if type(readfile)=='function' then if type(isfile)~='function' or isfile('h2o/main/rerun.txt') then g=(readfile('h2o/main/rerun.txt'))=='on' and 1 or 2 else g=2 end end end) if g==2 then _lg('abort guard off') return end")
+                table.insert(parts, "local function _lg(s) pcall(function() if writefile then pcall(function() makefolder('h2o') makefolder('h2o/main') end) writefile('h2o/main/rerun_log.txt', s) end end) end")
+                table.insert(parts, "local g='?' pcall(function() if type(readfile)=='function' and (type(isfile)~='function' or isfile('h2o/main/rerun.txt')) then g=(readfile('h2o/main/rerun.txt')) end end) _lg('bootstrap started guard=' .. tostring(g)) if g=='off' then _lg('abort guard off') return end")
                 local path = startupState.path
                 local url = startupState.url
                 if type(path) == "string" and #path > 0 then
                         local safe = path:gsub("['%\\]", "")
-                        parts[#parts + 1] = ("pcall(function() if type(isfile)~='function' or isfile('%s') then src=(readfile('%s')) end end"):format(safe, safe)
+                        parts[#parts + 1] = ("pcall(function() if type(isfile)~='function' or isfile('%s') then src=(readfile('%s')) end end)"):format(safe, safe)
                 end
                 if type(url) == "string" and #url > 8 then
                         local safe = url:gsub("['%\\]", "")
-                        parts[#parts + 1] = ("pcall(function() for _=1,4 do if src then break end pcall(function() local b=(game:HttpGet('%s')) if b and #b>50 and not b:lower():find('<!doctype',1,true) and not b:lower():find('<html',1,true) then src=(b) end end) if not src and task and task.wait then task.wait(1) end end end"):format(safe)
+                        parts[#parts + 1] = ("pcall(function() for _=1,4 do if src then break end pcall(function() local b=(game:HttpGet('%s')) if b and #b>50 and not b:lower():find('<!doctype',1,true) and not b:lower():find('<html',1,true) then src=(b) end end) if not src and task and task.wait then task.wait(1) end end end)"):format(safe)
                 end
                 parts[#parts + 1] = ("if not src and type(readfile)=='function' then pcall(function() local c=readfile('%s') if type(c)=='string' and #c>50 then src=c end end) end"):format(sourceSignature)
                 parts[#parts + 1] = "if src and #src>50 then pcall(function() if getgenv then getgenv().H2O_RERUN=true end end) f=(loadstring(src)) end"
@@ -226,10 +254,7 @@ do
                                 if ok and isLikelyH2oSource(body) then
                                         startupState.url = normalized
                                         startupState.path = ""
-                                        if writeFileFn then
-                                                pcall(writeFileFn, sourceSignature, body)
-                                                h2o.SourceCached = true
-                                        end
+                                        h2o.SourceCached = verifiedWrite(sourceSignature, body)
                                         status = "rerun source set - url ok (" .. #body .. " chars)"
                                 else
                                         status = "url fetch failed or does not look like h2o"
@@ -240,10 +265,7 @@ do
                         if ok and isLikelyH2oSource(body) then
                                 startupState.path = text
                                 startupState.url = ""
-                                if writeFileFn then
-                                        pcall(writeFileFn, sourceSignature, body)
-                                        h2o.SourceCached = true
-                                end
+                                h2o.SourceCached = verifiedWrite(sourceSignature, body)
                                 status = "rerun source set - file (" .. #body .. " chars)"
                         else
                                 status = "file exists but does not look like h2o"
@@ -274,21 +296,22 @@ do
                 end
         end)
         local function writeRerunGuard(enabled)
-                if not writeFileFn then
-                        return
-                end
-                pcall(function()
-                        writeFileFn("h2o/main/rerun.txt", enabled and "on" or "off")
-                end)
+                local ok, err = verifiedWrite("h2o/main/rerun.txt", enabled and "on" or "off")
+                h2o.GuardSaveOk = ok
+                h2o.GuardSaveErr = err
+                return ok
         end
         h2o.DisarmRerunQueue = function()
                 writeRerunGuard(false)
         end
         h2o.ArmRerunQueue = function()
-                if h2o.TeleportQueued or not h2o.QueueTeleport or h2o.Unloaded then
+                if not h2o.QueueTeleport or h2o.Unloaded then
                         return
                 end
                 writeRerunGuard(true)
+                if h2o.TeleportQueued then
+                        return
+                end
                 h2o.QueueTeleport(buildRerunBootstrap())
                 h2o.TeleportQueued = true
         end
@@ -296,16 +319,89 @@ do
                 if typeof(LocalPlayer) ~= "Instance" then
                         return
                 end
-                local conn = LocalPlayer.OnTeleport:Connect(function(state)
-                        if h2o.Unloaded or h2o.TeleportQueued then
+                h2o.TeleportHook = LocalPlayer.OnTeleport:Connect(function(state)
+                        if h2o.Unloaded or state ~= Enum.TeleportState.Started or not startupState.rerun then
                                 return
                         end
-                        if state == Enum.TeleportState.Started and startupState.rerun and h2o.QueueTeleport then
+                        pcall(function()
+                                verifiedWrite("h2o/main/teleport_log.txt", os.date("%Y-%m-%d %H:%M:%S") .. " teleport started queued=" .. tostring(not not h2o.TeleportQueued))
+                        end)
+                        if not h2o.Notify then
+                                return
+                        end
+                        if h2o.TeleportQueued then
+                                h2o.Notify("teleport detected - rerun bootstrap already queued", 5)
+                        elseif h2o.QueueTeleport then
                                 h2o.ArmRerunQueue()
+                                h2o.Notify("teleport detected - rerun queued now", 5)
+                        else
+                                h2o.Notify("teleport detected - queue_on_teleport missing, cannot rerun", 6)
                         end
                 end)
-                table.insert(h2o.Maid, conn)
+                table.insert(h2o.Maid, h2o.TeleportHook)
         end)
+        h2o.RunStartupDiagnostics = function()
+                local lines = {}
+                local function add(s)
+                        lines[#lines + 1] = tostring(s)
+                end
+                local function yn(v)
+                        return v and "yes" or "no"
+                end
+                add("env: write=" .. yn(writeFileFn) .. " read=" .. yn(readFileFn) .. " isfile=" .. yn(isFileFn) .. " isfolder=" .. yn(isFolderFn) .. " makefolder=" .. yn(makeFolderFn) .. " queue=" .. yn(h2o.QueueTeleport))
+                add("folders: h2o=" .. yn(isFolderFn and isFolderFn("h2o")) .. " main=" .. yn(isFolderFn and isFolderFn("h2o/main")) .. " (last ensure: " .. (h2o.FolderOk and "ok" or tostring(h2o.FolderErr or "unknown")) .. ")")
+                local function fileStat(file)
+                        if isFileFn and not isFileFn(file) then
+                                return "missing"
+                        end
+                        if not readFileFn then
+                                return "present (readfile unavailable)"
+                        end
+                        local ok, body = pcall(readFileFn, file)
+                        if not ok or type(body) ~= "string" then
+                                return "present but unreadable"
+                        end
+                        if #body > 70 then
+                                return tostring(#body) .. " bytes, starts: " .. body:sub(1, 70)
+                        end
+                        return tostring(#body) .. " bytes: " .. body
+                end
+                add("startup.json: " .. fileStat("h2o/main/startup.json"))
+                add("rerun.txt: " .. fileStat("h2o/main/rerun.txt"))
+                add("rerun_log.txt: " .. fileStat("h2o/main/rerun_log.txt"))
+                add("teleport_log.txt: " .. fileStat("h2o/main/teleport_log.txt"))
+                add("source.lua: " .. fileStat(sourceSignature))
+                local writeOk, writeErr = verifiedWrite("h2o/main/diag_test.txt", "h2o diag " .. tostring(os and os.date and os.date("%H:%M:%S") or ""))
+                add("write test: " .. (writeOk and "ok" or "failed - " .. writeErr))
+                add("last startup.json save: " .. (h2o.StartupSaveOk and "ok" or "failed - " .. tostring(h2o.StartupSaveErr or "not attempted this session")))
+                add("last rerun.txt save: " .. (h2o.GuardSaveOk and "ok" or "failed - " .. tostring(h2o.GuardSaveErr or "not attempted this session")))
+                local sourceDesc = "none"
+                if startupState.path ~= "" then
+                        sourceDesc = "file (" .. startupState.path .. ")"
+                elseif startupState.url ~= "" then
+                        sourceDesc = "url (" .. (startupState.url:match("^https?://([^/]+)") or startupState.url) .. ")"
+                end
+                add("state: rerun=" .. yn(startupState.rerun) .. " silent=" .. yn(startupState.silent) .. " queued=" .. yn(h2o.TeleportQueued) .. " hook=" .. yn(h2o.TeleportHook and h2o.TeleportHook.Connected))
+                add("source: " .. sourceDesc .. " | cached=" .. yn(h2o.SourceCached) .. " | bootstrap=" .. tostring(#buildRerunBootstrap()) .. " chars")
+                if not h2o.TeleportQueued and h2o.QueueTeleport then
+                        h2o.QueueTeleport("pcall(function() if writefile then pcall(function() makefolder('h2o') makefolder('h2o/main') end) writefile('h2o/main/queue_probe.txt', 'queue ran ' .. tostring(os and os.date and os.date('%H:%M:%S') or '')) end end)")
+                        add("queue probe armed - if queue_probe.txt appears after your next hop, the executor runs queued scripts")
+                end
+                local report = table.concat(lines, "\n")
+                verifiedWrite("h2o/main/diag.txt", report)
+                if h2o.Notify and task and task.spawn then
+                        task.spawn(function()
+                                for _, line in ipairs(lines) do
+                                        h2o.Notify(line, 9)
+                                        if task and task.wait then
+                                                task.wait(0.4)
+                                        end
+                                end
+                                h2o.Notify("full report written to h2o/main/diag.txt", 9)
+                        end)
+                end
+                return report
+        end
         if startupState.rerun then
                 h2o.ArmRerunQueue()
         else
@@ -409,6 +505,7 @@ end
 local function notify(text, time)
         Library:Notify({ Title = h2o.Name, Description = tostring(text), Time = time or 5 })
 end
+h2o.Notify = notify
 
 local function getRoot()
         local char = LocalPlayer.Character
@@ -8760,10 +8857,21 @@ do
                         notify(status, 5)
                 end,
         })
+        StartupGroup:AddButton({
+                Text = "run startup diagnostics",
+                Func = function()
+                        if h2o.RunStartupDiagnostics then
+                                h2o.RunStartupDiagnostics()
+                        end
+                end,
+        })
 
         Toggles.startup_rerun:OnChanged(function()
                 h2o.StartupState.rerun = Toggles.startup_rerun.Value
                 h2o.SaveStartupState()
+                if h2o.StartupSaveOk == false then
+                        notify("startup.json save failed - " .. tostring(h2o.StartupSaveErr or "unknown"), 7)
+                end
                 if Toggles.startup_rerun.Value then
                         if not h2o.QueueTeleport then
                                 notify("executor does not support queue_on_teleport", 5)
@@ -8772,6 +8880,9 @@ do
                         else
                                 h2o.ArmRerunQueue()
                                 notify("rerun armed - h2o reloads after your next teleport", 4)
+                                if h2o.GuardSaveOk == false then
+                                        notify("warning: rerun.txt write failed - " .. tostring(h2o.GuardSaveErr or "unknown"), 7)
+                                end
                         end
                 else
                         h2o.DisarmRerunQueue()
@@ -8781,6 +8892,9 @@ do
         Toggles.startup_silent:OnChanged(function()
                 h2o.StartupState.silent = Toggles.startup_silent.Value
                 h2o.SaveStartupState()
+                if h2o.StartupSaveOk == false then
+                        notify("startup.json save failed - " .. tostring(h2o.StartupSaveErr or "unknown"), 7)
+                end
                 if Toggles.startup_silent.Value then
                         notify("menu will start hidden on next load", 4)
                 end
