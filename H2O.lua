@@ -13,7 +13,7 @@ local TextChatService = game:GetService("TextChatService")
 
 local h2o = {
         Name = "h2o",
-        Version = "1.2.3",
+        Version = "1.2.4",
         Author = "h2o",
         DefaultSourceUrl = "https://raw.githubusercontent.com/jakenortha2-beep/skid/main/H2O.lua",
         Toggles = {},
@@ -284,6 +284,10 @@ do
                         getgenv().H2O_RERUN = nil
                 end
         end)
+        if h2o.TeleportRerun then
+                startupState.rerun = true
+                saveStartupState()
+        end
         pcall(function()
                 local forced = getgenv and getgenv().H2O_SOURCE_URL
                 if type(forced) == "string" and #forced > 8 then
@@ -320,7 +324,7 @@ do
                         return
                 end
                 h2o.TeleportHook = LocalPlayer.OnTeleport:Connect(function(state)
-                        if h2o.Unloaded or state ~= Enum.TeleportState.Started or not startupState.rerun then
+                        if h2o.Unloaded or state ~= Enum.TeleportState.Started or not (startupState.rerun or h2o.TeleportRerun) then
                                 return
                         end
                         pcall(function()
@@ -381,7 +385,7 @@ do
                 elseif startupState.url ~= "" then
                         sourceDesc = "url (" .. (startupState.url:match("^https?://([^/]+)") or startupState.url) .. ")"
                 end
-                add("state: rerun=" .. yn(startupState.rerun) .. " silent=" .. yn(startupState.silent) .. " queued=" .. yn(h2o.TeleportQueued) .. " hook=" .. yn(h2o.TeleportHook and h2o.TeleportHook.Connected))
+                add("state: rerun=" .. yn(startupState.rerun) .. " silent=" .. yn(startupState.silent) .. " chain=" .. yn(h2o.TeleportRerun) .. " queued=" .. yn(h2o.TeleportQueued) .. " hook=" .. yn(h2o.TeleportHook and h2o.TeleportHook.Connected))
                 add("source: " .. sourceDesc .. " | cached=" .. yn(h2o.SourceCached) .. " | bootstrap=" .. tostring(#buildRerunBootstrap()) .. " chars")
                 if not h2o.TeleportQueued and h2o.QueueTeleport then
                         h2o.QueueTeleport("pcall(function() if writefile then pcall(function() makefolder('h2o') makefolder('h2o/main') end) writefile('h2o/main/queue_probe.txt', 'queue ran ' .. tostring(os and os.date and os.date('%H:%M:%S') or '')) end end)")
@@ -402,7 +406,7 @@ do
                 end
                 return report
         end
-        if startupState.rerun then
+        if startupState.rerun or h2o.TeleportRerun then
                 h2o.ArmRerunQueue()
         else
                 writeRerunGuard(false)
