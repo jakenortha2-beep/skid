@@ -13,7 +13,7 @@ local TextChatService = game:GetService("TextChatService")
 
 local h2o = {
         Name = "h2o",
-        Version = "1.2.1",
+        Version = "1.2.2",
         Author = "h2o",
         DefaultSourceUrl = "https://raw.githubusercontent.com/jakenortha2-beep/skid/main/H2O.lua",
         Toggles = {},
@@ -24,26 +24,6 @@ local h2o = {
 }
 
 local LocalPlayer = Players.LocalPlayer
-
-local repo = "https://raw.githubusercontent.com/deividcomsono/Obsidian/main/"
-
-local loaded, Library, ThemeManager, SaveManager = pcall(function()
-        local function fetch(path)
-                local chunk = loadstring(game:HttpGet(repo .. path))
-                assert(chunk, "failed to compile: " .. path)
-                return chunk()
-        end
-        return fetch("Library.lua"), fetch("addons/ThemeManager.lua"), fetch("addons/SaveManager.lua")
-end)
-
-if not loaded then
-        return
-end
-
-Library.ShowToggleFrameInKeybinds = true
-
-local Toggles = Library.Toggles
-local Options = Library.Options
 
 do
         local startupState = { rerun = false, silent = false, url = "", path = "" }
@@ -163,6 +143,8 @@ do
         h2o.SaveStartupState = saveStartupState
         local function buildRerunBootstrap()
                 local parts = {}
+                table.insert(parts, "local function _lg(s) pcall(function() if writefile then writefile('h2o/main/rerun_log.txt', s) end end) end")
+                table.insert(parts, "local g=0 pcall(function() if type(readfile)=='function' then if type(isfile)~='function' or isfile('h2o/main/rerun.txt') then g=(readfile('h2o/main/rerun.txt'))=='on' and 1 or 2 else g=2 end end end) if g==2 then _lg('abort guard off') return end")
                 local path = startupState.path
                 local url = startupState.url
                 if type(path) == "string" and #path > 0 then
@@ -171,11 +153,13 @@ do
                 end
                 if type(url) == "string" and #url > 8 then
                         local safe = url:gsub("['%\\]", "")
-                        parts[#parts + 1] = ("pcall(function() if not src then local b=(game:HttpGet('%s')) if b and #b>50 and not b:lower():find('<!doctype',1,true) and not b:lower():find('<html',1,true) then src=(b) end end end"):format(safe)
+                        parts[#parts + 1] = ("pcall(function() for _=1,4 do if src then break end pcall(function() local b=(game:HttpGet('%s')) if b and #b>50 and not b:lower():find('<!doctype',1,true) and not b:lower():find('<html',1,true) then src=(b) end end) if not src and task and task.wait then task.wait(1) end end end"):format(safe)
                 end
                 parts[#parts + 1] = ("if not src and type(readfile)=='function' then pcall(function() local c=readfile('%s') if type(c)=='string' and #c>50 then src=c end end) end"):format(sourceSignature)
-                parts[#parts + 1] = "if src and #src>50 then local f=loadstring(src) if f then f() end end"
-                return "pcall(function() local src=nil " .. table.concat(parts, " ") .. " end)"
+                parts[#parts + 1] = "if src and #src>50 then pcall(function() if getgenv then getgenv().H2O_RERUN=true end end) f=(loadstring(src)) end"
+                parts[#parts + 1] = "_lg('src=' .. tostring(src and #src or 'nil') .. ' compiled=' .. tostring(f ~= nil))"
+                parts[#parts + 1] = "if f then f() end"
+                return "pcall(function() local src=nil local f=nil " .. table.concat(parts, " ") .. " end)"
         end
         local function normalizeSourceUrl(text)
                 text = tostring(text or ""):gsub("^%s+", ""):gsub("%s+$", "")
@@ -271,6 +255,13 @@ do
                 return status
         end
         h2o.SetRerunSource = setRerunSource
+        h2o.TeleportRerun = false
+        pcall(function()
+                h2o.TeleportRerun = (getgenv and getgenv().H2O_RERUN) == true
+                if getgenv then
+                        getgenv().H2O_RERUN = nil
+                end
+        end)
         pcall(function()
                 local forced = getgenv and getgenv().H2O_SOURCE_URL
                 if type(forced) == "string" and #forced > 8 then
@@ -282,21 +273,66 @@ do
                         end
                 end
         end)
+        local function writeRerunGuard(enabled)
+                if not writeFileFn then
+                        return
+                end
+                pcall(function()
+                        writeFileFn("h2o/main/rerun.txt", enabled and "on" or "off")
+                end)
+        end
+        h2o.DisarmRerunQueue = function()
+                writeRerunGuard(false)
+        end
+        h2o.ArmRerunQueue = function()
+                if h2o.TeleportQueued or not h2o.QueueTeleport or h2o.Unloaded then
+                        return
+                end
+                writeRerunGuard(true)
+                h2o.QueueTeleport(buildRerunBootstrap())
+                h2o.TeleportQueued = true
+        end
         pcall(function()
                 if typeof(LocalPlayer) ~= "Instance" then
                         return
                 end
                 local conn = LocalPlayer.OnTeleport:Connect(function(state)
-                        if h2o.Unloaded then
+                        if h2o.Unloaded or h2o.TeleportQueued then
                                 return
                         end
                         if state == Enum.TeleportState.Started and startupState.rerun and h2o.QueueTeleport then
-                                h2o.QueueTeleport(buildRerunBootstrap())
+                                h2o.ArmRerunQueue()
                         end
                 end)
                 table.insert(h2o.Maid, conn)
         end)
+        if startupState.rerun then
+                h2o.ArmRerunQueue()
+        else
+                writeRerunGuard(false)
+        end
 end
+
+local repo = "https://raw.githubusercontent.com/deividcomsono/Obsidian/main/"
+
+local loaded, Library, ThemeManager, SaveManager = pcall(function()
+        local function fetch(path)
+                local chunk = loadstring(game:HttpGet(repo .. path))
+                assert(chunk, "failed to compile: " .. path)
+                return chunk()
+        end
+        return fetch("Library.lua"), fetch("addons/ThemeManager.lua"), fetch("addons/SaveManager.lua")
+end)
+
+if not loaded then
+        return
+end
+
+Library.ShowToggleFrameInKeybinds = true
+
+local Toggles = Library.Toggles
+local Options = Library.Options
+
 
 local Window = Library:CreateWindow({
         Title = h2o.Name,
@@ -328,6 +364,11 @@ ThemeManager:ApplyToTab(h2o.Tabs.settings)
 
 Library:OnUnload(function()
         h2o.Unloaded = true
+        pcall(function()
+                if h2o.DisarmRerunQueue then
+                        h2o.DisarmRerunQueue()
+                end
+        end)
         for _, item in ipairs(h2o.Maid) do
                 pcall(function()
                         if typeof(item) == "RBXScriptConnection" then
@@ -8728,7 +8769,13 @@ do
                                 notify("executor does not support queue_on_teleport", 5)
                         elseif sourceStatus() == "rerun source: unavailable" then
                                 notify("no rerun source - paste your script url or file path below", 6)
+                        else
+                                h2o.ArmRerunQueue()
+                                notify("rerun armed - h2o reloads after your next teleport", 4)
                         end
+                else
+                        h2o.DisarmRerunQueue()
+                        notify("rerun disarmed", 4)
                 end
         end)
         Toggles.startup_silent:OnChanged(function()
@@ -8754,5 +8801,12 @@ if not h2o.StartupState.silent then
                 Title = h2o.Name,
                 Description = "loaded - press RightShift to toggle the menu",
                 Time = 4,
+        })
+end
+if h2o.TeleportRerun and h2o.StartupState.silent then
+        Library:Notify({
+                Title = h2o.Name,
+                Description = "reloaded after teleport - running silently, press RightShift",
+                Time = 6,
         })
 end
