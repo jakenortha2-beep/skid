@@ -13,9 +13,8 @@ local TextChatService = game:GetService("TextChatService")
 
 local h2o = {
         Name = "h2o",
-        Version = "1.2.5",
+        Version = "1.4.0",
         Author = "h2o",
-        DefaultSourceUrl = "https://raw.githubusercontent.com/jakenortha2-beep/skid/main/H2O.lua",
         Toggles = {},
         Options = {},
         Modules = {},
@@ -26,19 +25,13 @@ local h2o = {
 local LocalPlayer = Players.LocalPlayer
 
 do
-        local startupState = { rerun = false, silent = false, url = "", path = "" }
+        local startupState = { silent = false }
         h2o.StartupState = startupState
         local writeFileFn = typeof(writefile) == "function" and writefile or nil
         local readFileFn = typeof(readfile) == "function" and readfile or nil
         local isFileFn = typeof(isfile) == "function" and isfile or nil
         local isFolderFn = typeof(isfolder) == "function" and isfolder or nil
         local makeFolderFn = typeof(makefolder) == "function" and makefolder or nil
-        local queueTeleportFn = (typeof(queue_on_teleport) == "function" and queue_on_teleport)
-                or (typeof(queueonteleport) == "function" and queueonteleport)
-                or nil
-        h2o.QueueTeleport = queueTeleportFn and function(code)
-                pcall(queueTeleportFn, code)
-        end or nil
         h2o.FolderOk = false
         local function ensureH2oFolders()
                 if not makeFolderFn then
@@ -96,72 +89,10 @@ do
                 if type(decoded) ~= "table" then
                         return
                 end
-                if type(decoded.rerun) == "boolean" then
-                        startupState.rerun = decoded.rerun
-                end
                 if type(decoded.silent) == "boolean" then
                         startupState.silent = decoded.silent
                 end
-                if type(decoded.url) == "string" then
-                        startupState.url = decoded.url
-                end
-                if type(decoded.path) == "string" then
-                        startupState.path = decoded.path
-                end
         end)
-        if startupState.url == "" and type(h2o.DefaultSourceUrl) == "string" and #h2o.DefaultSourceUrl > 8 then
-                startupState.url = h2o.DefaultSourceUrl
-        end
-        h2o.SourceCached = false
-        local sourceSignature = "h2o/main/source.lua"
-        local function captureSource()
-                local candidates = {}
-                pcall(function()
-                        if typeof(getcallingscript) == "function" then
-                                local sc = getcallingscript()
-                                if sc then
-                                        candidates[#candidates + 1] = sc
-                                end
-                        end
-                end)
-                pcall(function()
-                        if typeof(script) == "Instance" then
-                                candidates[#candidates + 1] = script
-                        end
-                end)
-                pcall(function()
-                        local listFn = typeof(getloadedscripts) == "function" and getloadedscripts
-                                or (typeof(getscripts) == "function" and getscripts or nil)
-                        if listFn then
-                                local list = listFn()
-                                if type(list) == "table" then
-                                        for i, sc in ipairs(list) do
-                                                if i > 200 then
-                                                        break
-                                                end
-                                                candidates[#candidates + 1] = sc
-                                        end
-                                end
-                        end
-                end)
-                for _, sc in ipairs(candidates) do
-                        pcall(function()
-                                if h2o.SourceCached then
-                                        return
-                                end
-                                local src = sc.Source
-                                if type(src) == "string" and #src > 1000 and src:find(sourceSignature, 1, true) then
-                                        h2o.SourceCached = verifiedWrite(sourceSignature, src)
-                                end
-                        end)
-                        if h2o.SourceCached then
-                                break
-                        end
-                end
-                return h2o.SourceCached
-        end
-        h2o.CaptureSource = captureSource
-        captureSource()
         local function saveStartupState()
                 local ok, err = verifiedWrite("h2o/main/startup.json", HttpService:JSONEncode(startupState))
                 h2o.StartupSaveOk = ok
@@ -169,280 +100,6 @@ do
                 return ok
         end
         h2o.SaveStartupState = saveStartupState
-        local function buildRerunBootstrap()
-                local parts = {}
-                table.insert(parts, "local function _lg(s) pcall(function() if writefile then pcall(function() makefolder('h2o') makefolder('h2o/main') end) writefile('h2o/main/rerun_log.txt', s) end end) end")
-                table.insert(parts, "local g='?' pcall(function() if type(readfile)=='function' and (type(isfile)~='function' or isfile('h2o/main/rerun.txt')) then g=(readfile('h2o/main/rerun.txt')) end end) _lg('bootstrap started guard=' .. tostring(g)) if g=='off' then _lg('abort guard off') return end")
-                table.insert(parts, "pcall(function() if writefile then writefile('h2o/main/chain.txt', tostring(os and os.time and os.time() or 0)) end end)")
-                local path = startupState.path
-                local url = startupState.url
-                if type(path) == "string" and #path > 0 then
-                        local safe = path:gsub("['%\\]", "")
-                        parts[#parts + 1] = ("pcall(function() if type(isfile)~='function' or isfile('%s') then src=(readfile('%s')) end end)"):format(safe, safe)
-                end
-                if type(url) == "string" and #url > 8 then
-                        local safe = url:gsub("['%\\]", "")
-                        parts[#parts + 1] = ("pcall(function() for _=1,4 do if src then break end pcall(function() local b=(game:HttpGet('%s')) if b and #b>50 and not b:lower():find('<!doctype',1,true) and not b:lower():find('<html',1,true) then src=(b) end end) if not src and task and task.wait then task.wait(1) end end end)"):format(safe)
-                end
-                parts[#parts + 1] = ("if not src and type(readfile)=='function' then pcall(function() local c=readfile('%s') if type(c)=='string' and #c>50 then src=c end end) end"):format(sourceSignature)
-                parts[#parts + 1] = "if src and #src>50 then pcall(function() if getgenv then getgenv().H2O_RERUN=true end end) f=(loadstring(src)) end"
-                parts[#parts + 1] = "_lg('src=' .. tostring(src and #src or 'nil') .. ' compiled=' .. tostring(f ~= nil))"
-                parts[#parts + 1] = "if f then f() end"
-                return "pcall(function() local src=nil local f=nil " .. table.concat(parts, " ") .. " end)"
-        end
-        local function normalizeSourceUrl(text)
-                text = tostring(text or ""):gsub("^%s+", ""):gsub("%s+$", "")
-                local offset
-                local lower = text:lower()
-                if lower:sub(1, 8) == "https://" then
-                        offset = 9
-                elseif lower:sub(1, 7) == "http://" then
-                        offset = 8
-                else
-                        return ""
-                end
-                local rest = text:sub(offset)
-                local host, path = rest:match("^([^/]+)/?(.*)$")
-                host = host and host:lower() or ""
-                if host == "github.com" then
-                        local prefix, tail = path:match("^(.-)/blob/(.+)$")
-                        if not prefix then
-                                prefix, tail = path:match("^(.-)/raw/(.+)$")
-                        end
-                        if prefix and tail then
-                                tail = tail:match("^([^%?#]+)") or tail
-                                tail = tail:gsub("/+$", "")
-                                return ("https://raw.githubusercontent.com/%s/%s"):format(prefix, tail)
-                        end
-                elseif host == "gist.github.com" then
-                        local guser, gid = path:match("^([%w%.%-%_]+)/([%w%-]+)")
-                        if guser and gid then
-                                return ("https://gist.githubusercontent.com/%s/%s/raw"):format(guser, gid)
-                        end
-                elseif host == "pastebin.com" then
-                        local pasteId = path:match("^([^/]+)$")
-                        if pasteId and pasteId:lower() ~= "raw" then
-                                return ("https://pastebin.com/raw/%s"):format(pasteId)
-                        end
-                end
-                return text
-        end
-        local function isLikelyH2oSource(body)
-                if type(body) ~= "string" or #body < 100 then
-                        return false
-                end
-                local head = body:sub(1, 300):lower()
-                if head:find("<!doctype", 1, true) or head:find("<html", 1, true) then
-                        return false
-                end
-                return body:find(sourceSignature, 1, true) ~= nil or body:find("loadstring", 1, true) ~= nil
-        end
-        local function setRerunSource(text)
-                text = tostring(text or ""):gsub("^%s+", ""):gsub("%s+$", "")
-                local status
-                if text == "" then
-                        startupState.path = ""
-                        startupState.url = ""
-                        status = "rerun source cleared"
-                elseif text:sub(1, 4):lower() == "http" then
-                        local normalized = normalizeSourceUrl(text)
-                        if normalized == "" then
-                                status = "invalid url"
-                        else
-                                local ok, body = pcall(function()
-                                        return game:HttpGet(normalized)
-                                end)
-                                if ok and isLikelyH2oSource(body) then
-                                        startupState.url = normalized
-                                        startupState.path = ""
-                                        h2o.SourceCached = verifiedWrite(sourceSignature, body)
-                                        status = "rerun source set - url ok (" .. #body .. " chars)"
-                                else
-                                        status = "url fetch failed or does not look like h2o"
-                                end
-                        end
-                elseif readFileFn and (not isFileFn or isFileFn(text)) then
-                        local ok, body = pcall(readFileFn, text)
-                        if ok and isLikelyH2oSource(body) then
-                                startupState.path = text
-                                startupState.url = ""
-                                h2o.SourceCached = verifiedWrite(sourceSignature, body)
-                                status = "rerun source set - file (" .. #body .. " chars)"
-                        else
-                                status = "file exists but does not look like h2o"
-                        end
-                else
-                        status = "file not found - check the path"
-                end
-                saveStartupState()
-                return status
-        end
-        h2o.SetRerunSource = setRerunSource
-        h2o.TeleportRerun = false
-        pcall(function()
-                h2o.TeleportRerun = (getgenv and getgenv().H2O_RERUN) == true
-                if getgenv then
-                        getgenv().H2O_RERUN = nil
-                end
-        end)
-        pcall(function()
-                if readFileFn and (not isFileFn or isFileFn("h2o/main/chain.txt")) then
-                        local ok2, body2 = pcall(readFileFn, "h2o/main/chain.txt")
-                        local ts = ok2 and tonumber(body2) or nil
-                        if ts and os and os.time and os.time() - ts < 120 then
-                                h2o.TeleportRerun = true
-                        end
-                end
-        end)
-        if h2o.TeleportRerun then
-                startupState.rerun = true
-                saveStartupState()
-        end
-        pcall(function()
-                local forced = getgenv and getgenv().H2O_SOURCE_URL
-                if type(forced) == "string" and #forced > 8 then
-                        local clean = normalizeSourceUrl(forced)
-                        if clean ~= "" then
-                                startupState.url = clean
-                                startupState.path = ""
-                                saveStartupState()
-                        end
-                end
-        end)
-        local function writeRerunGuard(enabled)
-                local ok, err = verifiedWrite("h2o/main/rerun.txt", enabled and "on" or "off")
-                h2o.GuardSaveOk = ok
-                h2o.GuardSaveErr = err
-                return ok
-        end
-        h2o.DisarmRerunQueue = function()
-                writeRerunGuard(false)
-                pcall(function()
-                        verifiedWrite("h2o/main/chain.txt", "0")
-                end)
-        end
-        h2o.ArmRerunQueue = function()
-                if not h2o.QueueTeleport or h2o.Unloaded or h2o.QueuePending then
-                        return
-                end
-                writeRerunGuard(true)
-                h2o.QueuePending = true
-                h2o.FlushQueueNow = false
-                task.spawn(function()
-                        if h2o.TeleportRerun and task and task.wait then
-                                for _ = 1, 50 do
-                                        if h2o.Unloaded or h2o.FlushQueueNow then
-                                                break
-                                        end
-                                        task.wait(0.1)
-                                end
-                        end
-                        h2o.QueuePending = false
-                        if h2o.Unloaded or h2o.TeleportQueued then
-                                return
-                        end
-                        h2o.TeleportQueued = true
-                        h2o.QueueTeleport(buildRerunBootstrap())
-                end)
-        end
-        pcall(function()
-                if typeof(LocalPlayer) ~= "Instance" then
-                        return
-                end
-                h2o.TeleportHook = LocalPlayer.OnTeleport:Connect(function(state)
-                        if h2o.Unloaded or state ~= Enum.TeleportState.Started or not (startupState.rerun or h2o.TeleportRerun) then
-                                return
-                        end
-                        pcall(function()
-                                verifiedWrite("h2o/main/teleport_log.txt", os.date("%Y-%m-%d %H:%M:%S") .. " teleport started queued=" .. tostring(not not h2o.TeleportQueued))
-                        end)
-                        h2o.FlushQueueNow = true
-                        if not h2o.Notify then
-                                return
-                        end
-                        if h2o.TeleportQueued then
-                                h2o.Notify("teleport detected - rerun bootstrap already queued", 5)
-                        elseif h2o.QueueTeleport then
-                                h2o.ArmRerunQueue()
-                                h2o.Notify("teleport detected - rerun queued now", 5)
-                        else
-                                h2o.Notify("teleport detected - queue_on_teleport missing, cannot rerun", 6)
-                        end
-                end)
-                table.insert(h2o.Maid, h2o.TeleportHook)
-        end)
-        h2o.RunStartupDiagnostics = function()
-                local lines = {}
-                local function add(s)
-                        lines[#lines + 1] = tostring(s)
-                end
-                local function yn(v)
-                        return v and "yes" or "no"
-                end
-                add("env: write=" .. yn(writeFileFn) .. " read=" .. yn(readFileFn) .. " isfile=" .. yn(isFileFn) .. " isfolder=" .. yn(isFolderFn) .. " makefolder=" .. yn(makeFolderFn) .. " queue=" .. yn(h2o.QueueTeleport))
-                add("folders: h2o=" .. yn(isFolderFn and isFolderFn("h2o")) .. " main=" .. yn(isFolderFn and isFolderFn("h2o/main")) .. " (last ensure: " .. (h2o.FolderOk and "ok" or tostring(h2o.FolderErr or "unknown")) .. ")")
-                local function fileStat(file)
-                        if isFileFn and not isFileFn(file) then
-                                return "missing"
-                        end
-                        if not readFileFn then
-                                return "present (readfile unavailable)"
-                        end
-                        local ok, body = pcall(readFileFn, file)
-                        if not ok or type(body) ~= "string" then
-                                return "present but unreadable"
-                        end
-                        if #body > 70 then
-                                return tostring(#body) .. " bytes, starts: " .. body:sub(1, 70)
-                        end
-                        return tostring(#body) .. " bytes: " .. body
-                end
-                add("startup.json: " .. fileStat("h2o/main/startup.json"))
-                add("rerun.txt: " .. fileStat("h2o/main/rerun.txt"))
-                add("rerun_log.txt: " .. fileStat("h2o/main/rerun_log.txt"))
-                add("teleport_log.txt: " .. fileStat("h2o/main/teleport_log.txt"))
-                add("chain.txt: " .. fileStat("h2o/main/chain.txt"))
-                add("last_load.txt: " .. fileStat("h2o/main/last_load.txt"))
-                add("source.lua: " .. fileStat(sourceSignature))
-                local writeOk, writeErr = verifiedWrite("h2o/main/diag_test.txt", "h2o diag " .. tostring(os and os.date and os.date("%H:%M:%S") or ""))
-                add("write test: " .. (writeOk and "ok" or "failed - " .. writeErr))
-                add("last startup.json save: " .. (h2o.StartupSaveOk and "ok" or "failed - " .. tostring(h2o.StartupSaveErr or "not attempted this session")))
-                add("last rerun.txt save: " .. (h2o.GuardSaveOk and "ok" or "failed - " .. tostring(h2o.GuardSaveErr or "not attempted this session")))
-                local sourceDesc = "none"
-                if startupState.path ~= "" then
-                        sourceDesc = "file (" .. startupState.path .. ")"
-                elseif startupState.url ~= "" then
-                        sourceDesc = "url (" .. (startupState.url:match("^https?://([^/]+)") or startupState.url) .. ")"
-                end
-                add("state: rerun=" .. yn(startupState.rerun) .. " silent=" .. yn(startupState.silent) .. " chain=" .. yn(h2o.TeleportRerun) .. " queued=" .. yn(h2o.TeleportQueued) .. " hook=" .. yn(h2o.TeleportHook and h2o.TeleportHook.Connected))
-                add("source: " .. sourceDesc .. " | cached=" .. yn(h2o.SourceCached) .. " | bootstrap=" .. tostring(#buildRerunBootstrap()) .. " chars")
-                if not h2o.TeleportQueued and h2o.QueueTeleport then
-                        h2o.QueueTeleport("pcall(function() if writefile then pcall(function() makefolder('h2o') makefolder('h2o/main') end) writefile('h2o/main/queue_probe.txt', 'queue ran ' .. tostring(os and os.date and os.date('%H:%M:%S') or '')) end end)")
-                        add("queue probe armed - if queue_probe.txt appears after your next hop, the executor runs queued scripts")
-                end
-                local report = table.concat(lines, "\n")
-                verifiedWrite("h2o/main/diag.txt", report)
-                if h2o.Notify and task and task.spawn then
-                        task.spawn(function()
-                                for _, line in ipairs(lines) do
-                                        h2o.Notify(line, 9)
-                                        if task and task.wait then
-                                                task.wait(0.4)
-                                        end
-                                end
-                                h2o.Notify("full report written to h2o/main/diag.txt", 9)
-                        end)
-                end
-                return report
-        end
-        pcall(function()
-                verifiedWrite("h2o/main/last_load.txt", os.date("%Y-%m-%d %H:%M:%S") .. " v" .. tostring(h2o.Version) .. " chain=" .. tostring(not not h2o.TeleportRerun) .. " rerun=" .. tostring(not not startupState.rerun) .. " queue=" .. tostring(not not h2o.QueueTeleport))
-        end)
-        if startupState.rerun or h2o.TeleportRerun then
-                h2o.ArmRerunQueue()
-        else
-                writeRerunGuard(false)
-        end
 end
 
 local repo = "https://raw.githubusercontent.com/deividcomsono/Obsidian/main/"
@@ -488,7 +145,7 @@ h2o.Tabs = {
 ThemeManager:SetLibrary(Library)
 SaveManager:SetLibrary(Library)
 SaveManager:IgnoreThemeSettings()
-SaveManager:SetIgnoreIndexes({ "MenuKeybind", "startup_rerun", "startup_silent", "startup_source" })
+SaveManager:SetIgnoreIndexes({ "MenuKeybind", "startup_silent" })
 ThemeManager:SetFolder(h2o.Name)
 SaveManager:SetFolder(h2o.Name .. "/main")
 SaveManager:BuildConfigSection(h2o.Tabs.settings)
@@ -496,11 +153,6 @@ ThemeManager:ApplyToTab(h2o.Tabs.settings)
 
 Library:OnUnload(function()
         h2o.Unloaded = true
-        pcall(function()
-                if h2o.DisarmRerunQueue then
-                        h2o.DisarmRerunQueue()
-                end
-        end)
         for _, item in ipairs(h2o.Maid) do
                 pcall(function()
                         if typeof(item) == "RBXScriptConnection" then
@@ -8849,82 +8501,481 @@ do
 end
 
 do
-        local StartupGroup = h2o.Tabs.settings:AddLeftGroupbox("startup", "rocket")
+        local TriggerGroup = h2o.Tabs.combat:AddLeftGroupbox("triggerbot", "crosshair")
 
-        local function sourceStatus()
-                if h2o.StartupState.path ~= "" then
-                        return "rerun source: file path"
-                elseif h2o.StartupState.url ~= "" then
-                        local host = h2o.StartupState.url:match("^https?://([^/]+)")
-                        return "rerun source: url (" .. (host and host:lower() or "url") .. ")"
-                elseif h2o.SourceCached then
-                        return "rerun source: cached script"
+        local R15Parts = {
+                "Head", "UpperTorso", "LowerTorso", "HumanoidRootPart",
+                "LeftUpperArm", "LeftLowerArm", "LeftHand",
+                "RightUpperArm", "RightLowerArm", "RightHand",
+                "LeftUpperLeg", "LeftLowerLeg", "LeftFoot",
+                "RightUpperLeg", "RightLowerLeg", "RightFoot",
+                "HitboxHead", "HitboxHeadSmall", "PhysicalHitboxHead",
+                "HitboxBody", "HitboxBodySmall", "FakeMass",
+        }
+
+        TriggerGroup:AddToggle("trigger_enabled", {
+                Text = "enabled",
+                Default = false,
+                Tooltip = "automatically fires when your crosshair rests on an enemy",
+        })
+        TriggerGroup:AddSlider("trigger_reaction", { Text = "reaction time", Min = 0, Max = 300, Default = 100, Rounding = 0, Suffix = "ms" })
+        TriggerGroup:AddSlider("trigger_offset", { Text = "reaction offset", Min = 0, Max = 100, Default = 0, Rounding = 0, Suffix = "ms" })
+        TriggerGroup:AddSlider("trigger_forget", { Text = "forget time", Min = 0, Max = 10, Default = 0.5, Rounding = 1, Suffix = "s" })
+        TriggerGroup:AddSlider("trigger_delay", { Text = "shoot delay", Min = 0, Max = 300, Default = 0, Rounding = 0, Suffix = "ms" })
+        TriggerGroup:AddSlider("trigger_distance", { Text = "max distance", Min = 25, Max = 500, Default = 100, Rounding = 0, Suffix = "studs" })
+        TriggerGroup:AddDropdown("trigger_blacklist", {
+                Values = R15Parts,
+                Default = {},
+                Multi = true,
+                Text = "part blacklist",
+                Searchable = true,
+                Tooltip = "body parts the triggerbot ignores",
+        })
+        TriggerGroup:AddDropdown("trigger_settings", {
+                Values = { "no delay between targets", "anti katana" },
+                Default = { "no delay between targets", "anti katana" },
+                Multi = true,
+                Text = "settings",
+                Tooltip = "no delay between targets skips the reaction wait on a new enemy - anti katana holds fire while an enemy is deflecting",
+        })
+        TriggerGroup:AddDropdown("trigger_scoped", {
+                Values = { "Sniper", "Crossbow" },
+                Default = { "Sniper", "Crossbow" },
+                Multi = true,
+                Text = "check scoped if",
+                Tooltip = "only fire with these weapons while fully scoped in",
+        })
+
+        local tb = {
+                connection = nil,
+                rayParams = nil,
+                katanaClass = nil,
+                katanaTried = false,
+                hookedKatana = false,
+                originalReplicate = nil,
+                deflecting = {},
+                lockedTarget = nil,
+                lockedPart = nil,
+                candidateTarget = nil,
+                candidateSince = 0,
+                lastSeen = 0,
+                lastShot = 0,
+                shooting = false,
+        }
+
+        local function optionSet(dropdownId, name)
+                local dropdown = Options[dropdownId]
+                if not dropdown then
+                        return false
                 end
-                return "rerun source: unavailable"
+                local value = dropdown.Value
+                if type(value) ~= "table" then
+                        return value == name
+                end
+                if value[name] == true then
+                        return true
+                end
+                return table.find(value, name) ~= nil
         end
 
-        StartupGroup:AddToggle("startup_rerun", {
-                Text = "re-run after teleport",
-                Default = h2o.StartupState.rerun,
-                Tooltip = "automatically re-executes h2o after any game teleport",
-        })
+        local function ensureRayParams()
+                if tb.rayParams then
+                        return true
+                end
+                local ok = pcall(function()
+                        local params = RaycastParams.new()
+                        params.FilterType = Enum.RaycastFilterType.Exclude
+                        params.IgnoreWater = true
+                        tb.rayParams = params
+                end)
+                return ok and tb.rayParams ~= nil
+        end
+
+        local function markEnemyDeflect(item)
+                local fighter = rawget(item, "ClientFighter") or item.ClientFighter
+                if not fighter then
+                        return
+                end
+                local isLocal = false
+                pcall(function()
+                        isLocal = fighter.IsLocalPlayer
+                end)
+                if isLocal then
+                        return
+                end
+                local userId = nil
+                pcall(function()
+                        local player = fighter.Player
+                        if player and player.UserId then
+                                userId = player.UserId
+                        end
+                end)
+                if not userId then
+                        pcall(function()
+                                userId = fighter:Get("ObjectID")
+                        end)
+                end
+                if not userId then
+                        return
+                end
+                local duration = 1
+                pcall(function()
+                        if item.Info and item.Info.DeflectDuration then
+                                duration = item.Info.DeflectDuration
+                        end
+                end)
+                tb.deflecting[userId] = os.clock() + duration + 0.12
+        end
+
+        local function getKatanaClass()
+                if tb.katanaClass then
+                        return tb.katanaClass
+                end
+                if tb.katanaTried then
+                        return nil
+                end
+                tb.katanaTried = true
+                pcall(function()
+                        local playerScripts = LocalPlayer:FindFirstChild("PlayerScripts")
+                        local modules = playerScripts and playerScripts:FindFirstChild("Modules")
+                        local items = modules and modules:FindFirstChild("Items")
+                        local katanaScript = items and items:FindFirstChild("Katana")
+                        if not katanaScript then
+                                return
+                        end
+                        local ok, mod = pcall(require, katanaScript)
+                        if not ok or type(mod) ~= "table" then
+                                return
+                        end
+                        local mt = getmetatable(mod)
+                        if type(mt) == "table" and type(rawget(mt, "ReplicateFromServer")) == "function" then
+                                tb.katanaClass = mt
+                        elseif type(rawget(mod, "ReplicateFromServer")) == "function" then
+                                tb.katanaClass = mod
+                        end
+                end)
+                return tb.katanaClass
+        end
+
+        local function setupKatanaHook()
+                if tb.hookedKatana then
+                        return true
+                end
+                local class = getKatanaClass()
+                if not class then
+                        return false
+                end
+                local ok = pcall(function()
+                        local original = class.ReplicateFromServer
+                        tb.originalReplicate = original
+                        class.ReplicateFromServer = function(self, action, ...)
+                                pcall(function()
+                                        if type(self) ~= "table" then
+                                                return
+                                        end
+                                        local itemName = nil
+                                        pcall(function()
+                                                itemName = self.Name
+                                        end)
+                                        if itemName ~= "Katana" then
+                                                return
+                                        end
+                                        local actionStr = tostring(action)
+                                        pcall(function()
+                                                if type(self.FromEnum) == "function" then
+                                                        actionStr = tostring(self:FromEnum(action))
+                                                end
+                                        end)
+                                        actionStr = actionStr:lower()
+                                        if actionStr == "startaiming" or actionStr == "startblocking" or actionStr == "deflect" or actionStr == "startdeflect" or actionStr:find("deflect", 1, true) ~= nil then
+                                                markEnemyDeflect(self)
+                                        end
+                                end)
+                                return original(self, action, ...)
+                        end
+                end)
+                tb.hookedKatana = ok
+                return ok
+        end
+
+        local function isKatanaBlocked(char)
+                if not optionSet("trigger_settings", "anti katana") then
+                        return false
+                end
+                if not tb.hookedKatana then
+                        pcall(setupKatanaHook)
+                end
+                if not tb.hookedKatana then
+                        return false
+                end
+                local now = os.clock()
+                local userId = nil
+                pcall(function()
+                        local player = Players:GetPlayerFromCharacter(char)
+                        if player then
+                                userId = player.UserId
+                        end
+                end)
+                for key, endTime in pairs(tb.deflecting) do
+                        if now >= endTime then
+                                tb.deflecting[key] = nil
+                        elseif not userId or key == userId then
+                                return true
+                        end
+                end
+                return false
+        end
+
+        local function partAllowed(part)
+                if not part or not part:IsA("BasePart") then
+                        return false
+                end
+                local blacklist = Options.trigger_blacklist and Options.trigger_blacklist.Value or {}
+                if type(blacklist) == "table" and (blacklist[part.Name] == true or table.find(blacklist, part.Name) ~= nil) then
+                        return false
+                end
+                return true
+        end
+
+        local function getCharacterFromPart(part)
+                local node = part
+                while node and node ~= workspace do
+                        if node:IsA("Model") and node:FindFirstChildOfClass("Humanoid") then
+                                return node
+                        end
+                        node = node.Parent
+                end
+                return nil
+        end
+
+        local function isEnemyCharacter(char)
+                if not char or char == LocalPlayer.Character then
+                        return false
+                end
+                local player = Players:GetPlayerFromCharacter(char)
+                if not player or player == LocalPlayer then
+                        return false
+                end
+                local hum = char:FindFirstChildOfClass("Humanoid")
+                return hum ~= nil and hum.Health > 0
+        end
+
+        local function getTarget()
+                local camera = workspace.CurrentCamera
+                if not camera or not LocalPlayer.Character then
+                        return nil, nil
+                end
+                if not ensureRayParams() then
+                        return nil, nil
+                end
+                local maxDist = Options.trigger_distance and Options.trigger_distance.Value or 100
+                local ray = camera:ViewportPointToRay(camera.ViewportSize.X / 2, camera.ViewportSize.Y / 2)
+                local filter = { LocalPlayer.Character, camera }
+                local viewModels = workspace:FindFirstChild("ViewModels")
+                if viewModels then
+                        table.insert(filter, viewModels)
+                end
+                tb.rayParams.FilterDescendantsInstances = filter
+                local result = workspace:Raycast(ray.Origin, ray.Direction * maxDist, tb.rayParams)
+                if not result or not result.Instance or not partAllowed(result.Instance) then
+                        return nil, nil
+                end
+                local char = getCharacterFromPart(result.Instance)
+                if not isEnemyCharacter(char) then
+                        return nil, nil
+                end
+                if isKatanaBlocked(char) then
+                        return nil, nil
+                end
+                return char, result.Instance
+        end
+
+        local function getStableTarget()
+                local target, part = getTarget()
+                local now = os.clock()
+                if target then
+                        if target ~= tb.candidateTarget then
+                                tb.candidateTarget = target
+                                tb.candidateSince = now
+                        end
+                        local offset = Options.trigger_offset and Options.trigger_offset.Value or 0
+                        local reaction = math.max(0, (Options.trigger_reaction and Options.trigger_reaction.Value or 0) + offset) / 1000
+                        if optionSet("trigger_settings", "no delay between targets") or target == tb.lockedTarget or now - tb.candidateSince >= reaction then
+                                tb.lockedTarget = target
+                                tb.lockedPart = part
+                                tb.lastSeen = now
+                        end
+                else
+                        tb.candidateTarget = nil
+                end
+                local forget = Options.trigger_forget and Options.trigger_forget.Value or 0
+                if tb.lockedTarget and now - tb.lastSeen <= forget then
+                        local hum = tb.lockedTarget:FindFirstChildOfClass("Humanoid")
+                        if hum and hum.Health > 0 and tb.lockedPart and tb.lockedPart.Parent then
+                                return tb.lockedTarget, tb.lockedPart
+                        end
+                end
+                tb.lockedTarget = nil
+                tb.lockedPart = nil
+                return nil, nil
+        end
+
+        local function getItemName(item)
+                if not item then
+                        return ""
+                end
+                local name = item.Name or ""
+                pcall(function()
+                        name = item:Get("Name") or name
+                end)
+                pcall(function()
+                        name = item.Info and item.Info.Name or name
+                end)
+                return tostring(name)
+        end
+
+        local function isScopedEnough(item)
+                local itemName = getItemName(item)
+                if not optionSet("trigger_scoped", itemName) then
+                        return true
+                end
+                local aiming = false
+                pcall(function()
+                        aiming = item:Get("IsAiming") == true
+                end)
+                pcall(function()
+                        aiming = aiming or (type(item.IsFullyAiming) == "function" and item:IsFullyAiming() == true)
+                end)
+                pcall(function()
+                        aiming = aiming or (item.ItemInterface and item.ItemInterface.IsScopeActive and item.ItemInterface:IsScopeActive() == true)
+                end)
+                pcall(function()
+                        aiming = aiming or (item.ViewModel and item.Info and item.Info.AimScopePercent and item.ViewModel.CurrentAimValue >= item.Info.AimScopePercent)
+                end)
+                return aiming
+        end
+
+        local function clickOnce()
+                if type(mouse1click) == "function" then
+                        local active = true
+                        pcall(function()
+                                if type(isrbxactive) == "function" then
+                                        active = isrbxactive() == true
+                                elseif type(iswindowactive) == "function" then
+                                        active = iswindowactive() == true
+                                end
+                        end)
+                        if not active then
+                                return false
+                        end
+                        pcall(mouse1click)
+                        return true
+                end
+                if type(mouse1press) == "function" and type(mouse1release) == "function" then
+                        pcall(mouse1press)
+                        task.delay(0.03, function()
+                                pcall(mouse1release)
+                        end)
+                        return true
+                end
+                return false
+        end
+
+        local function tryShoot()
+                if tb.shooting then
+                        return
+                end
+                local fighter = getLocalFighter()
+                local item = fighter and fighter.EquippedItem or nil
+                if not item or not isScopedEnough(item) then
+                        return
+                end
+                tb.shooting = true
+                pcall(clickOnce)
+                task.delay(0.05, function()
+                        tb.shooting = false
+                end)
+        end
+
+        local function heartbeat()
+                if h2o.Unloaded or Library.Toggled then
+                        return
+                end
+                local ok, target = pcall(getStableTarget)
+                if not ok or not target then
+                        return
+                end
+                local now = os.clock()
+                local delay = (Options.trigger_delay and Options.trigger_delay.Value or 0) / 1000
+                if now - tb.lastShot < delay then
+                        return
+                end
+                tb.lastShot = now
+                pcall(tryShoot)
+        end
+
+        local function stop()
+                if tb.connection then
+                        pcall(function()
+                                tb.connection:Disconnect()
+                        end)
+                        tb.connection = nil
+                end
+                tb.lockedTarget = nil
+                tb.lockedPart = nil
+                tb.candidateTarget = nil
+                tb.shooting = false
+        end
+
+        local function start()
+                if tb.connection then
+                        return
+                end
+                if not ensureRayParams() then
+                        notify("triggerbot - raycast params unavailable", 6)
+                        return
+                end
+                local hasClick = false
+                pcall(function()
+                        hasClick = type(mouse1click) == "function" or (type(mouse1press) == "function" and type(mouse1release) == "function")
+                end)
+                if not hasClick then
+                        notify("triggerbot - this executor cannot simulate clicks", 6)
+                        return
+                end
+                if optionSet("trigger_settings", "anti katana") then
+                        pcall(setupKatanaHook)
+                end
+                tb.connection = RunService.Heartbeat:Connect(heartbeat)
+        end
+
+        Toggles.trigger_enabled:OnChanged(function()
+                if Toggles.trigger_enabled.Value then
+                        start()
+                else
+                        stop()
+                end
+        end)
+
+        table.insert(h2o.Maid, function()
+                stop()
+                if tb.hookedKatana and tb.katanaClass and tb.originalReplicate then
+                        pcall(function()
+                                tb.katanaClass.ReplicateFromServer = tb.originalReplicate
+                        end)
+                end
+                table.clear(tb.deflecting)
+        end)
+end
+
+do
+        local StartupGroup = h2o.Tabs.settings:AddLeftGroupbox("startup", "rocket")
+
         StartupGroup:AddToggle("startup_silent", {
                 Text = "silent load",
                 Default = h2o.StartupState.silent,
                 Tooltip = "menu stays hidden the next time the script loads - open it with your menu keybind",
         })
-        StartupGroup:AddDivider()
-        local SourceLabel = StartupGroup:AddLabel(sourceStatus(), true)
-        local SourceInput = StartupGroup:AddInput("startup_source", {
-                Default = h2o.StartupState.path ~= "" and h2o.StartupState.path or h2o.StartupState.url,
-                Text = "rerun source",
-                Placeholder = "paste raw script url or local file path",
-                Tooltip = "where h2o is re-loaded from after a teleport - github/gist/pastebin links are converted to raw automatically - click test to save it",
-        })
-        StartupGroup:AddButton({
-                Text = "test rerun source",
-                Func = function()
-                        local status = h2o.SetRerunSource(SourceInput.Value)
-                        local display = h2o.StartupState.path ~= "" and h2o.StartupState.path or h2o.StartupState.url
-                        if display ~= "" and SourceInput.Value ~= display then
-                                SourceInput:SetValue(display)
-                        end
-                        SourceLabel:SetText(sourceStatus())
-                        notify(status, 5)
-                end,
-        })
-        StartupGroup:AddButton({
-                Text = "run startup diagnostics",
-                Func = function()
-                        if h2o.RunStartupDiagnostics then
-                                h2o.RunStartupDiagnostics()
-                        end
-                end,
-        })
-
-        Toggles.startup_rerun:OnChanged(function()
-                h2o.StartupState.rerun = Toggles.startup_rerun.Value
-                h2o.SaveStartupState()
-                if h2o.StartupSaveOk == false then
-                        notify("startup.json save failed - " .. tostring(h2o.StartupSaveErr or "unknown"), 7)
-                end
-                if Toggles.startup_rerun.Value then
-                        if not h2o.QueueTeleport then
-                                notify("executor does not support queue_on_teleport", 5)
-                        elseif sourceStatus() == "rerun source: unavailable" then
-                                notify("no rerun source - paste your script url or file path below", 6)
-                        else
-                                h2o.ArmRerunQueue()
-                                notify("rerun armed - h2o reloads after your next teleport", 4)
-                                if h2o.GuardSaveOk == false then
-                                        notify("warning: rerun.txt write failed - " .. tostring(h2o.GuardSaveErr or "unknown"), 7)
-                                end
-                        end
-                else
-                        h2o.DisarmRerunQueue()
-                        notify("rerun disarmed", 4)
-                end
-        end)
         Toggles.startup_silent:OnChanged(function()
                 h2o.StartupState.silent = Toggles.startup_silent.Value
                 h2o.SaveStartupState()
@@ -8933,13 +8984,6 @@ do
                 end
                 if Toggles.startup_silent.Value then
                         notify("menu will start hidden on next load", 4)
-                end
-        end)
-        Options.startup_source:OnChanged(function()
-                if Options.startup_source.Value == "" and (h2o.StartupState.path ~= "" or h2o.StartupState.url ~= "") then
-                        h2o.SetRerunSource("")
-                        SourceLabel:SetText(sourceStatus())
-                        notify("rerun source cleared", 4)
                 end
         end)
 end
@@ -8951,12 +8995,5 @@ if not h2o.StartupState.silent then
                 Title = h2o.Name,
                 Description = "loaded - press RightShift to toggle the menu",
                 Time = 4,
-        })
-end
-if h2o.TeleportRerun and h2o.StartupState.silent then
-        Library:Notify({
-                Title = h2o.Name,
-                Description = "reloaded after teleport - running silently, press RightShift",
-                Time = 6,
         })
 end
