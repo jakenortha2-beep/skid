@@ -66375,6 +66375,56 @@ local boot = (function()
         end
     end
 
+    --======================================================================
+    --  Re-run After Teleport
+    --  The menu toggle ("Re-run After Teleport") writes AutoExecuteScript.Enabled
+    --  into the config store. The original writer for it was left out of this
+    --  rebuild, so nothing ever read it. This block is that missing consumer:
+    --  when the local player starts teleporting (server hop, queue -> match,
+    --  etc.) and the toggle is on, queue the loader so it runs in the next server.
+    --======================================================================
+    do
+        local RELOAD_URL = "https://raw.githubusercontent.com/jakenortha2-beep/skid/main/Kicia.lua"
+        local FLAG = "KiciaRebuildAutoExec"
+        local PATH = { "AutoExecuteScript", "Enabled" }
+
+        local function isEnabled()
+            local cfg = store.Data and store.Data.AutoExecuteScript
+            return type(cfg) == "table" and cfg.Enabled == true
+        end
+
+        -- We were launched by a queued teleport: the toggle was on when we left,
+        -- so turn it back on here too (otherwise the next hop would not re-queue).
+        local env = getgenv()
+        if env[FLAG] == true then
+            env[FLAG] = nil
+            pcall(function() store:Set(PATH, true) end)
+        end
+
+        local queue = K.fn("queue_on_teleport") or K.fn("queueonteleport")
+        if queue == nil then
+            pcall(function()
+                if syn and type(syn.queue_on_teleport) == "function" then queue = syn.queue_on_teleport end
+            end)
+        end
+
+        if queue ~= nil then
+            local payload = ("getgenv().%s = true; loadstring(game:HttpGet(%q))()"):format(FLAG, RELOAD_URL)
+            local queued = false
+            local conn = player.OnTeleport:Connect(function(teleportState)
+                -- queue_on_teleport stacks and can't be undone, so queue at most once
+                -- per session (a failed hop that is retried reuses the queued payload)
+                if teleportState == Enum.TeleportState.Started and not queued and isEnabled() then
+                    queued = true
+                    pcall(queue, payload)
+                end
+            end)
+            K.onUnload(function() pcall(function() conn:Disconnect() end) end)
+        else
+            warn("[Kicia Rebuild] Re-run After Teleport: this executor has no queue_on_teleport")
+        end
+    end
+
     local Theme = tbl17.A()
     local theme = store.Data.Theme
     if theme ~= nil then
