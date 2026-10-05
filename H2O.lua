@@ -13,7 +13,7 @@ local TextChatService = game:GetService("TextChatService")
 
 local h2o = {
         Name = "h2o",
-        Version = "1.2.4",
+        Version = "1.2.5",
         Author = "h2o",
         DefaultSourceUrl = "https://raw.githubusercontent.com/jakenortha2-beep/skid/main/H2O.lua",
         Toggles = {},
@@ -173,6 +173,7 @@ do
                 local parts = {}
                 table.insert(parts, "local function _lg(s) pcall(function() if writefile then pcall(function() makefolder('h2o') makefolder('h2o/main') end) writefile('h2o/main/rerun_log.txt', s) end end) end")
                 table.insert(parts, "local g='?' pcall(function() if type(readfile)=='function' and (type(isfile)~='function' or isfile('h2o/main/rerun.txt')) then g=(readfile('h2o/main/rerun.txt')) end end) _lg('bootstrap started guard=' .. tostring(g)) if g=='off' then _lg('abort guard off') return end")
+                table.insert(parts, "pcall(function() if writefile then writefile('h2o/main/chain.txt', tostring(os and os.time and os.time() or 0)) end end)")
                 local path = startupState.path
                 local url = startupState.url
                 if type(path) == "string" and #path > 0 then
@@ -284,6 +285,15 @@ do
                         getgenv().H2O_RERUN = nil
                 end
         end)
+        pcall(function()
+                if readFileFn and (not isFileFn or isFileFn("h2o/main/chain.txt")) then
+                        local ok2, body2 = pcall(readFileFn, "h2o/main/chain.txt")
+                        local ts = ok2 and tonumber(body2) or nil
+                        if ts and os and os.time and os.time() - ts < 120 then
+                                h2o.TeleportRerun = true
+                        end
+                end
+        end)
         if h2o.TeleportRerun then
                 startupState.rerun = true
                 saveStartupState()
@@ -307,17 +317,33 @@ do
         end
         h2o.DisarmRerunQueue = function()
                 writeRerunGuard(false)
+                pcall(function()
+                        verifiedWrite("h2o/main/chain.txt", "0")
+                end)
         end
         h2o.ArmRerunQueue = function()
-                if not h2o.QueueTeleport or h2o.Unloaded then
+                if not h2o.QueueTeleport or h2o.Unloaded or h2o.QueuePending then
                         return
                 end
                 writeRerunGuard(true)
-                if h2o.TeleportQueued then
-                        return
-                end
-                h2o.QueueTeleport(buildRerunBootstrap())
-                h2o.TeleportQueued = true
+                h2o.QueuePending = true
+                h2o.FlushQueueNow = false
+                task.spawn(function()
+                        if h2o.TeleportRerun and task and task.wait then
+                                for _ = 1, 50 do
+                                        if h2o.Unloaded or h2o.FlushQueueNow then
+                                                break
+                                        end
+                                        task.wait(0.1)
+                                end
+                        end
+                        h2o.QueuePending = false
+                        if h2o.Unloaded or h2o.TeleportQueued then
+                                return
+                        end
+                        h2o.TeleportQueued = true
+                        h2o.QueueTeleport(buildRerunBootstrap())
+                end)
         end
         pcall(function()
                 if typeof(LocalPlayer) ~= "Instance" then
@@ -330,6 +356,7 @@ do
                         pcall(function()
                                 verifiedWrite("h2o/main/teleport_log.txt", os.date("%Y-%m-%d %H:%M:%S") .. " teleport started queued=" .. tostring(not not h2o.TeleportQueued))
                         end)
+                        h2o.FlushQueueNow = true
                         if not h2o.Notify then
                                 return
                         end
@@ -374,6 +401,8 @@ do
                 add("rerun.txt: " .. fileStat("h2o/main/rerun.txt"))
                 add("rerun_log.txt: " .. fileStat("h2o/main/rerun_log.txt"))
                 add("teleport_log.txt: " .. fileStat("h2o/main/teleport_log.txt"))
+                add("chain.txt: " .. fileStat("h2o/main/chain.txt"))
+                add("last_load.txt: " .. fileStat("h2o/main/last_load.txt"))
                 add("source.lua: " .. fileStat(sourceSignature))
                 local writeOk, writeErr = verifiedWrite("h2o/main/diag_test.txt", "h2o diag " .. tostring(os and os.date and os.date("%H:%M:%S") or ""))
                 add("write test: " .. (writeOk and "ok" or "failed - " .. writeErr))
@@ -406,6 +435,9 @@ do
                 end
                 return report
         end
+        pcall(function()
+                verifiedWrite("h2o/main/last_load.txt", os.date("%Y-%m-%d %H:%M:%S") .. " v" .. tostring(h2o.Version) .. " chain=" .. tostring(not not h2o.TeleportRerun) .. " rerun=" .. tostring(not not startupState.rerun) .. " queue=" .. tostring(not not h2o.QueueTeleport))
+        end)
         if startupState.rerun or h2o.TeleportRerun then
                 h2o.ArmRerunQueue()
         else
