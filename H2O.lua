@@ -13,7 +13,7 @@ local TextChatService = game:GetService("TextChatService")
 
 local h2o = {
         Name = "h2o",
-        Version = "1.4.2",
+        Version = "1.4.4",
         Author = "h2o",
         Toggles = {},
         Options = {},
@@ -194,6 +194,162 @@ local function notify(text, time)
         Library:Notify({ Title = h2o.Name, Description = tostring(text), Time = time or 5 })
 end
 h2o.Notify = notify
+
+local isTouchDevice = false
+pcall(function()
+        isTouchDevice = UserInputService.TouchEnabled == true and UserInputService.MouseEnabled ~= true
+end)
+h2o.IsTouch = isTouchDevice
+
+local activeTouches = 0
+table.insert(h2o.Maid, UserInputService.InputBegan:Connect(function(input)
+        if input.UserInputType == Enum.UserInputType.Touch then
+                activeTouches += 1
+        end
+end))
+table.insert(h2o.Maid, UserInputService.InputEnded:Connect(function(input)
+        if input.UserInputType == Enum.UserInputType.Touch and activeTouches > 0 then
+                activeTouches -= 1
+        end
+end))
+
+local function isFireHeld()
+        local mouseHeld = false
+        pcall(function()
+                mouseHeld = UserInputService:IsMouseButtonPressed(Enum.UserInputType.MouseButton1)
+        end)
+        return mouseHeld or activeTouches > 0
+end
+
+local function getAimScreenPosition()
+        local camera = workspace.CurrentCamera
+        if isTouchDevice then
+                local viewport = camera and camera.ViewportSize or Vector2.new(1920, 1080)
+                return Vector2.new(viewport.X / 2, viewport.Y / 2)
+        end
+        local mouse = UserInputService:GetMouseLocation()
+        return Vector2.new(mouse.X, mouse.Y)
+end
+
+local fileStartEnum = nil
+local fileEnumTried = false
+local function getStartShootingEnum()
+        if not fileEnumTried then
+                fileEnumTried = true
+                pcall(function()
+                        local enums = require(game:GetService("ReplicatedStorage").Modules.EnumLibrary)
+                        if type(enums) == "table" and type(enums.ToEnum) == "function" then
+                                fileStartEnum = enums:ToEnum("StartShooting")
+                        end
+                end)
+        end
+        return fileStartEnum
+end
+
+local function buildShotCameraData(part)
+        if not part then
+                return nil
+        end
+        local ok, data = pcall(function()
+                local utility = require(game:GetService("ReplicatedStorage").Modules.Utility)
+                local camera = workspace.CurrentCamera
+                local fromPos = camera and camera.CFrame.Position or part.Position
+                local look = CFrame.new(fromPos, part.Position)
+                local packed = {}
+                packed[utf8.char(1)] = {
+                        [utf8.char(0)] = utility:EncodeCFrame(look),
+                        [utf8.char(1)] = utility:EncodeCFrame(look),
+                        [utf8.char(2)] = part,
+                        [utf8.char(3)] = utility:EncodeCFrame(part.CFrame:ToObjectSpace(CFrame.new(part.Position))),
+                }
+                return packed
+        end)
+        return ok and data or nil
+end
+
+local function fireUseItemShot(item, part)
+        local action = getStartShootingEnum()
+        local cameradata = buildShotCameraData(part)
+        if not action or not cameradata then
+                return false
+        end
+        local useItem = remote("Remotes", "Replication", "Fighter", "UseItem")
+        if not useItem or not useItem:IsA("RemoteEvent") then
+                return false
+        end
+        local objectId = nil
+        pcall(function()
+                if type(item.Get) == "function" then
+                        objectId = item:Get("ObjectID")
+                end
+        end)
+        if not objectId then
+                return false
+        end
+        useItem:FireServer(objectId, action, cameradata, nil)
+        return true
+end
+
+local function makeHoldButton(name, text, size, position, onPress, onRelease)
+        local holder = { gui = nil, button = nil, held = false }
+        pcall(function()
+                local gui = Instance.new("ScreenGui")
+                gui.Name = name
+                gui.ResetOnSpawn = false
+                gui.DisplayOrder = 1000001
+                gui.Enabled = false
+                gui.Parent = LocalPlayer:WaitForChild("PlayerGui")
+                local btn = Instance.new("TextButton")
+                btn.Size = size
+                btn.Position = position
+                btn.BackgroundColor3 = Color3.fromRGB(30, 30, 30)
+                btn.BackgroundTransparency = 0.25
+                btn.Text = text
+                btn.TextColor3 = Color3.new(1, 1, 1)
+                btn.Font = Enum.Font.GothamBold
+                btn.TextSize = 15
+                btn.AutoButtonColor = true
+                btn.Parent = gui
+                local corner = Instance.new("UICorner")
+                corner.CornerRadius = UDim.new(0, 10)
+                corner.Parent = btn
+                local stroke = Instance.new("UIStroke")
+                stroke.Color = Color3.new(1, 1, 1)
+                stroke.Transparency = 0.5
+                stroke.Parent = btn
+                btn.InputBegan:Connect(function(input)
+                        if input.UserInputType == Enum.UserInputType.Touch or input.UserInputType == Enum.UserInputType.MouseButton1 then
+                                holder.held = true
+                                if onPress then
+                                        pcall(onPress)
+                                end
+                        end
+                end)
+                btn.InputEnded:Connect(function(input)
+                        if input.UserInputType == Enum.UserInputType.Touch or input.UserInputType == Enum.UserInputType.MouseButton1 then
+                                holder.held = false
+                                if onRelease then
+                                        pcall(onRelease)
+                                end
+                        end
+                end)
+                holder.gui = gui
+                holder.button = btn
+        end)
+        return holder
+end
+
+local function setHoldButtonVisible(holder, visible)
+        if not holder or not holder.gui then
+                return
+        end
+        pcall(function()
+                holder.gui.Enabled = visible == true
+        end)
+        if not visible then
+                holder.held = false
+        end
+end
 
 local function getRoot()
         local char = LocalPlayer.Character
@@ -7251,8 +7407,7 @@ do
                                         end
                                 end
                                 if not center then
-                                        local mouse = UserInputService:GetMouseLocation()
-                                        center = Vector2.new(mouse.X, mouse.Y)
+                                        center = getAimScreenPosition()
                                 end
                                 local rot = Options.crosshair_rotation.Value + tick() * 360 * Options.crosshair_speed.Value
                                 local bounce = math.sin(tick() * 8 * Options.crosshair_bouncespeed.Value) * Options.crosshair_bounce.Value
@@ -7393,8 +7548,7 @@ do
                                         end
                                         return
                                 end
-                                local mouse = UserInputService:GetMouseLocation()
-                                local origin = Vector2.new(mouse.X + Options.indicator_offsetx.Value, mouse.Y + Options.indicator_offsety.Value)
+                                local origin = getAimScreenPosition() + Vector2.new(Options.indicator_offsetx.Value, Options.indicator_offsety.Value)
                                 for i, line in ipairs(lines) do
                                         if Options.indicator_style.Value == "upper" then
                                                 line = line:upper()
@@ -7635,29 +7789,54 @@ do
         AirJumpGroup:AddToggle("airjump_enabled", {
                 Text = "enabled",
                 Default = false,
-                Tooltip = "jump in mid air by holding space",
+                Tooltip = "jump in mid air by holding space - touch devices get an on-screen jump button",
         })
         AirJumpGroup:AddSlider("airjump_velocity", { Text = "velocity", Min = 50, Max = 300, Default = 50, Rounding = 0 })
+
+        local airjumpTouchHeld = false
+        local airjumpLoopActive = false
+        local function startAirJumpLoop()
+                if airjumpLoopActive then
+                        return
+                end
+                airjumpLoopActive = true
+                task.spawn(function()
+                        while (UserInputService:IsKeyDown(Enum.KeyCode.Space) or airjumpTouchHeld) and Toggles.airjump_enabled.Value and not h2o.Unloaded do
+                                if isAlive() then
+                                        local root = getRoot()
+                                        if root then
+                                                local v = root.AssemblyLinearVelocity
+                                                root.AssemblyLinearVelocity = Vector3.new(v.X, Options.airjump_velocity.Value, v.Z)
+                                        end
+                                end
+                                RunService.Heartbeat:Wait()
+                        end
+                        airjumpLoopActive = false
+                end)
+        end
 
         maid(UserInputService.InputBegan:Connect(function(input, gameProcessed)
                 if gameProcessed then
                         return
                 end
                 if input.UserInputType == Enum.UserInputType.Keyboard and input.KeyCode == Enum.KeyCode.Space then
-                        task.spawn(function()
-                                while UserInputService:IsKeyDown(Enum.KeyCode.Space) and Toggles.airjump_enabled.Value and not h2o.Unloaded do
-                                        if isAlive() then
-                                                local root = getRoot()
-                                                if root then
-                                                        local v = root.AssemblyLinearVelocity
-                                                        root.AssemblyLinearVelocity = Vector3.new(v.X, Options.airjump_velocity.Value, v.Z)
-                                                end
-                                        end
-                                        RunService.Heartbeat:Wait()
-                                end
-                        end)
+                        startAirJumpLoop()
                 end
         end))
+
+        local airjumpTouch = nil
+        if isTouchDevice then
+                airjumpTouch = makeHoldButton("h2o_airjump_touch", "JUMP", UDim2.fromOffset(76, 48), UDim2.new(1, -96, 1, -96), function()
+                        airjumpTouchHeld = true
+                        startAirJumpLoop()
+                end, function()
+                        airjumpTouchHeld = false
+                end)
+        end
+
+        Toggles.airjump_enabled:OnChanged(function()
+                setHoldButtonVisible(airjumpTouch, Toggles.airjump_enabled.Value)
+        end)
 
         local PhaseGroup = h2o.Tabs.character:AddLeftGroupbox("phase", "ghost")
 
@@ -7962,7 +8141,7 @@ do
         FlyGroup:AddToggle("fly_enabled", {
                 Text = "enabled",
                 Default = false,
-                Tooltip = "WASD + Space/E up + Ctrl/Q down",
+                Tooltip = "WASD + Space/E up + Ctrl/Q down - touch devices get a virtual joystick with up and down buttons",
         })
         FlyGroup:AddSlider("fly_speed", { Text = "fly speed", Min = 50, Max = 200, Default = 50, Rounding = 0, Suffix = " studs/s" })
 
@@ -8042,12 +8221,140 @@ do
                 end
         end))
 
+        local flyTouch = { x = 0, y = 0 }
+        local flyTouchGui = nil
+        local function setFlyTouchVisible(visible)
+                if not flyTouchGui then
+                        return
+                end
+                pcall(function()
+                        flyTouchGui.Enabled = visible == true
+                end)
+                if not visible then
+                        flyTouch.x = 0
+                        flyTouch.y = 0
+                        flyKeys.Up = false
+                        flyKeys.Down = false
+                end
+        end
+        if isTouchDevice then
+                pcall(function()
+                        local gui = Instance.new("ScreenGui")
+                        gui.Name = "h2o_fly_touch"
+                        gui.ResetOnSpawn = false
+                        gui.DisplayOrder = 1000001
+                        gui.Enabled = false
+                        gui.Parent = LocalPlayer:WaitForChild("PlayerGui")
+
+                        local base = Instance.new("Frame")
+                        base.AnchorPoint = Vector2.new(0, 1)
+                        base.Position = UDim2.new(0, 26, 1, -26)
+                        base.Size = UDim2.fromOffset(120, 120)
+                        base.BackgroundColor3 = Color3.fromRGB(30, 30, 30)
+                        base.BackgroundTransparency = 0.4
+                        base.BorderSizePixel = 0
+                        base.Parent = gui
+                        local baseCorner = Instance.new("UICorner")
+                        baseCorner.CornerRadius = UDim.new(1, 0)
+                        baseCorner.Parent = base
+                        local baseStroke = Instance.new("UIStroke")
+                        baseStroke.Color = Color3.new(1, 1, 1)
+                        baseStroke.Transparency = 0.6
+                        baseStroke.Parent = base
+
+                        local knob = Instance.new("Frame")
+                        knob.AnchorPoint = Vector2.new(0.5, 0.5)
+                        knob.Position = UDim2.fromScale(0.5, 0.5)
+                        knob.Size = UDim2.fromOffset(52, 52)
+                        knob.BackgroundColor3 = Color3.fromRGB(240, 240, 240)
+                        knob.BackgroundTransparency = 0.2
+                        knob.BorderSizePixel = 0
+                        knob.Parent = base
+                        local knobCorner = Instance.new("UICorner")
+                        knobCorner.CornerRadius = UDim.new(1, 0)
+                        knobCorner.Parent = knob
+
+                        local dragging = false
+                        local origin = nil
+                        local maxRadius = 44
+                        local function resetKnob()
+                                dragging = false
+                                origin = nil
+                                flyTouch.x = 0
+                                flyTouch.y = 0
+                                knob.Position = UDim2.fromScale(0.5, 0.5)
+                        end
+                        base.InputBegan:Connect(function(input)
+                                if input.UserInputType == Enum.UserInputType.Touch then
+                                        dragging = true
+                                        origin = Vector2.new(input.Position.X, input.Position.Y)
+                                end
+                        end)
+                        table.insert(h2o.Maid, UserInputService.InputChanged:Connect(function(input)
+                                if not dragging or input.UserInputType ~= Enum.UserInputType.Touch or not origin then
+                                        return
+                                end
+                                local rel = Vector2.new(input.Position.X, input.Position.Y) - origin
+                                if rel.Magnitude > maxRadius then
+                                        rel = rel.Unit * maxRadius
+                                end
+                                knob.Position = UDim2.new(0.5, rel.X, 0.5, rel.Y)
+                                flyTouch.x = rel.X / maxRadius
+                                flyTouch.y = rel.Y / maxRadius
+                        end))
+                        table.insert(h2o.Maid, UserInputService.InputEnded:Connect(function(input)
+                                if dragging and input.UserInputType == Enum.UserInputType.Touch then
+                                        resetKnob()
+                                end
+                        end))
+
+                        local function makeUpDownButton(text, position, isUp)
+                                local btn = Instance.new("TextButton")
+                                btn.Size = UDim2.fromOffset(56, 44)
+                                btn.Position = position
+                                btn.BackgroundColor3 = Color3.fromRGB(30, 30, 30)
+                                btn.BackgroundTransparency = 0.3
+                                btn.Text = text
+                                btn.TextColor3 = Color3.new(1, 1, 1)
+                                btn.Font = Enum.Font.GothamBold
+                                btn.TextSize = 14
+                                btn.Parent = gui
+                                local corner = Instance.new("UICorner")
+                                corner.CornerRadius = UDim.new(0, 10)
+                                corner.Parent = btn
+                                btn.InputBegan:Connect(function(input)
+                                        if input.UserInputType == Enum.UserInputType.Touch or input.UserInputType == Enum.UserInputType.MouseButton1 then
+                                                if isUp then
+                                                        flyKeys.Up = true
+                                                else
+                                                        flyKeys.Down = true
+                                                end
+                                        end
+                                end)
+                                btn.InputEnded:Connect(function(input)
+                                        if input.UserInputType == Enum.UserInputType.Touch or input.UserInputType == Enum.UserInputType.MouseButton1 then
+                                                if isUp then
+                                                        flyKeys.Up = false
+                                                else
+                                                        flyKeys.Down = false
+                                                end
+                                        end
+                                end)
+                        end
+                        makeUpDownButton("UP", UDim2.new(1, -96, 1, -196), true)
+                        makeUpDownButton("DOWN", UDim2.new(1, -96, 1, -140), false)
+
+                        flyTouchGui = gui
+                end)
+        end
+
         Toggles.fly_enabled:OnChanged(function()
                 if Toggles.fly_enabled.Value then
                         startFly()
                 else
                         stopFly()
                 end
+                setFlyTouchVisible(Toggles.fly_enabled.Value)
         end)
         maid(LocalPlayer.CharacterAdded:Connect(function()
                 if Toggles.fly_enabled.Value then
@@ -8084,8 +8391,10 @@ do
                                 camera.CameraType = Enum.CameraType.Track
                         end)
                         flyGyro.CFrame = camera.CFrame
-                        local move = camera.CFrame.LookVector * ((flyKeys.W and 1 or 0) - (flyKeys.S and 1 or 0))
-                                + camera.CFrame.RightVector * ((flyKeys.D and 1 or 0) - (flyKeys.A and 1 or 0))
+                        local moveX = math.clamp((flyKeys.D and 1 or 0) - (flyKeys.A and 1 or 0) + flyTouch.x, -1, 1)
+                        local moveZ = math.clamp((flyKeys.W and 1 or 0) - (flyKeys.S and 1 or 0) - flyTouch.y, -1, 1)
+                        local move = camera.CFrame.LookVector * moveZ
+                                + camera.CFrame.RightVector * moveX
                                 + Vector3.yAxis * ((flyKeys.Up and 1 or 0) - (flyKeys.Down and 1 or 0))
                         if move.Magnitude > 0 then
                                 flyVelocity.Velocity = move.Unit * Options.fly_speed.Value
@@ -8561,6 +8870,7 @@ do
                 lastSeen = 0,
                 lastShot = 0,
                 shooting = false,
+                directFire = false,
         }
 
         local function optionSet(dropdownId, name)
@@ -8881,7 +9191,7 @@ do
                 return false
         end
 
-        local function tryShoot()
+        local function tryShoot(target, part)
                 if tb.shooting then
                         return
                 end
@@ -8891,7 +9201,13 @@ do
                         return
                 end
                 tb.shooting = true
-                pcall(clickOnce)
+                if tb.directFire then
+                        pcall(function()
+                                fireUseItemShot(item, part or (target and target:FindFirstChild("Head")) or nil)
+                        end)
+                else
+                        pcall(clickOnce)
+                end
                 task.delay(0.05, function()
                         tb.shooting = false
                 end)
@@ -8901,7 +9217,7 @@ do
                 if h2o.Unloaded or Library.Toggled then
                         return
                 end
-                local ok, target = pcall(getStableTarget)
+                local ok, target, part = pcall(getStableTarget)
                 if not ok or not target then
                         return
                 end
@@ -8911,7 +9227,7 @@ do
                         return
                 end
                 tb.lastShot = now
-                pcall(tryShoot)
+                pcall(tryShoot, target, part)
         end
 
         local function stop()
@@ -8939,8 +9255,15 @@ do
                 pcall(function()
                         hasClick = type(mouse1click) == "function" or (type(mouse1press) == "function" and type(mouse1release) == "function")
                 end)
+                tb.directFire = false
                 if not hasClick then
-                        notify("triggerbot - this executor cannot simulate clicks", 6)
+                        pcall(function()
+                                local useItem = remote("Remotes", "Replication", "Fighter", "UseItem")
+                                tb.directFire = useItem ~= nil and getStartShootingEnum() ~= nil
+                        end)
+                end
+                if not hasClick and not tb.directFire then
+                        notify("triggerbot - no click simulation or direct fire available", 6)
                         return
                 end
                 if optionSet("trigger_settings", "anti katana") then
@@ -9305,12 +9628,12 @@ do
                                 and wstate.fullAuto
                                 and item
                                 and isLocalItem(item)
-                                and UserInputService:IsMouseButtonPressed(Enum.UserInputType.MouseButton1) do
+                                and isFireHeld() do
                                 task.wait(getFullAutoDelay(item))
                                 if not (wstate.enabled
                                         and wstate.fullAuto
                                         and isLocalItem(item)
-                                        and UserInputService:IsMouseButtonPressed(Enum.UserInputType.MouseButton1)) then
+                                        and isFireHeld()) then
                                         break
                                 end
                                 pcall(function()
@@ -9522,7 +9845,7 @@ do
         WeaponGroup:AddToggle("weapons_full_auto", {
                 Text = "full auto",
                 Default = false,
-                Tooltip = "holding the mouse keeps firing semi-auto weapons automatically",
+                Tooltip = "holding fire (mouse button or touching the screen) keeps firing semi-auto weapons automatically",
         })
         WeaponGroup:AddToggle("weapons_backstab", {
                 Text = "always backstab",
@@ -9625,9 +9948,11 @@ do
                 lastTargetPosition = nil,
                 rightClicked = false,
                 mouseSensitivity = 1,
+                holdButton = nil,
         }
 
         local moveConst = Vector2.new(1, 0.77) * math.rad(0.5)
+        local aimBindName = "h2o_aimassist_step"
 
         local function removeVisuals()
                 if aim.circle then
@@ -9702,7 +10027,7 @@ do
                                 aim.outlineStroke = stroke
                         end)
                 end
-                if not aim.circle and Drawing then
+                if not aim.circle and Drawing and not isTouchDevice then
                         pcall(function()
                                 local circle = Drawing.new("Circle")
                                 circle.Filled = false
@@ -9771,7 +10096,7 @@ do
                         local viewport = camera.ViewportSize
                         origin = Vector2.new(viewport.X / 2, viewport.Y / 2)
                 end
-                origin = origin or UserInputService:GetMouseLocation()
+                origin = origin or getAimScreenPosition()
                 return origin
         end
 
@@ -9881,6 +10206,34 @@ do
                 return closest
         end
 
+        local function resolveAimMode(value)
+                if value == "camera" then
+                        return "camera"
+                end
+                if value == "mouse" then
+                        return "mouse"
+                end
+                if isTouchDevice then
+                        return "camera"
+                end
+                if type(mousemoverel) == "function" then
+                        return "mouse"
+                end
+                return "camera"
+        end
+
+        local function rotateCamera(yawDelta, pitchDelta)
+                local camera = workspace.CurrentCamera
+                if not camera then
+                        return
+                end
+                local look = camera.CFrame.LookVector
+                local yaw = math.atan2(-look.X, -look.Z) + yawDelta
+                local pitch = math.asin(math.clamp(look.Y, -1, 1)) + pitchDelta
+                pitch = math.clamp(pitch, -1.5533, 1.5533)
+                camera.CFrame = CFrame.new(camera.CFrame.Position) * CFrame.fromEulerAnglesYXZ(pitch, yaw, 0)
+        end
+
         local function onStep(dt)
                 if h2o.Unloaded then
                         return
@@ -9935,7 +10288,8 @@ do
                                 aim.lastTargetPosition = nil
                                 return
                         end
-                        if Toggles.aimassist_right_click.Value and not aim.rightClicked then
+                        local holdOk = aim.rightClicked or (aim.holdButton and aim.holdButton.held == true)
+                        if Toggles.aimassist_right_click.Value and not holdOk then
                                 aim.lastTargetPosition = nil
                                 return
                         end
@@ -9962,29 +10316,21 @@ do
                         end
                         local diffYaw = wrapAngle(math.atan2(facing.X, facing.Z) - math.atan2(new.X, new.Z))
                         local diffPitch = math.asin(facing.Y) - math.asin(new.Y)
-                        local angle = Vector2.new(diffYaw, diffPitch) / (moveConst * getMouseSensitivity())
-                        angle = Vector2.new(angle.X * ((Options.aimassist_x_smooth.Value or 100) / 100), angle.Y * ((Options.aimassist_y_smooth.Value or 100) / 100))
-                        angle *= math.min(((Options.aimassist_speed.Value or 100) / 100) * (Options.aimassist_lerp.Value or 1) * dt * 10, 1)
-                        pcall(function()
-                                mousemoverel(angle.X, angle.Y)
-                        end)
+                        local stepScale = math.min(((Options.aimassist_speed.Value or 100) / 100) * (Options.aimassist_lerp.Value or 1) * dt * 10, 1)
+                        local xSmooth = (Options.aimassist_x_smooth.Value or 100) / 100
+                        local ySmooth = (Options.aimassist_y_smooth.Value or 100) / 100
+                        if resolveAimMode(Options.aimassist_mode and Options.aimassist_mode.Value or "auto") == "camera" then
+                                pcall(function()
+                                        rotateCamera(-diffYaw * xSmooth * stepScale, -diffPitch * ySmooth * stepScale)
+                                end)
+                        else
+                                local angle = Vector2.new(diffYaw, diffPitch) / (moveConst * getMouseSensitivity())
+                                angle = Vector2.new(angle.X * xSmooth, angle.Y * ySmooth) * stepScale
+                                pcall(function()
+                                        mousemoverel(angle.X, angle.Y)
+                                end)
+                        end
                 end)
-        end
-
-        local function disconnectRightClick()
-                if aim.inputBegan then
-                        pcall(function()
-                                aim.inputBegan:Disconnect()
-                        end)
-                        aim.inputBegan = nil
-                end
-                if aim.inputEnded then
-                        pcall(function()
-                                aim.inputEnded:Disconnect()
-                        end)
-                        aim.inputEnded = nil
-                end
-                aim.rightClicked = false
         end
 
         local function connectRightClick()
@@ -10001,12 +10347,42 @@ do
                                 aim.rightClicked = false
                         end
                 end)
+                if isTouchDevice and not aim.holdButton then
+                        aim.holdButton = makeHoldButton("h2o_aimassist_hold", "AIM", UDim2.fromOffset(64, 64), UDim2.new(1, -84, 1, -264))
+                        setHoldButtonVisible(aim.holdButton, true)
+                end
+        end
+
+        local function disconnectRightClick()
+                if aim.inputBegan then
+                        pcall(function()
+                                aim.inputBegan:Disconnect()
+                        end)
+                        aim.inputBegan = nil
+                end
+                if aim.inputEnded then
+                        pcall(function()
+                                aim.inputEnded:Disconnect()
+                        end)
+                        aim.inputEnded = nil
+                end
+                if aim.holdButton then
+                        pcall(function()
+                                aim.holdButton.gui:Destroy()
+                        end)
+                        aim.holdButton = nil
+                end
+                aim.rightClicked = false
         end
 
         local function stop()
                 if aim.connection then
                         pcall(function()
-                                aim.connection:Disconnect()
+                                if aim.connection == true then
+                                        RunService:UnbindFromRenderStep(aimBindName)
+                                else
+                                        aim.connection:Disconnect()
+                                end
                         end)
                         aim.connection = nil
                 end
@@ -10020,16 +10396,24 @@ do
                 if aim.connection then
                         return
                 end
-                local canMove = false
-                pcall(function()
-                        canMove = type(mousemoverel) == "function"
-                end)
-                if not canMove then
-                        notify("aim assist - this executor cannot move the mouse", 6)
+                if resolveAimMode(Options.aimassist_mode and Options.aimassist_mode.Value or "auto") == "mouse" and type(mousemoverel) ~= "function" then
+                        notify("aim assist - mouse mode needs mousemoverel, switch aim mode to camera", 6)
                         return
                 end
                 ensureVisuals()
-                aim.connection = RunService.RenderStepped:Connect(onStep)
+                pcall(function()
+                        RunService:UnbindFromRenderStep(aimBindName)
+                end)
+                local bound = false
+                pcall(function()
+                        RunService:BindToRenderStep(aimBindName, Enum.RenderPriority.Camera.Value + 1, onStep)
+                        bound = true
+                end)
+                if bound then
+                        aim.connection = true
+                else
+                        aim.connection = RunService.RenderStepped:Connect(onStep)
+                end
                 if Toggles.aimassist_right_click.Value then
                         connectRightClick()
                 end
@@ -10039,6 +10423,12 @@ do
                 Text = "enabled",
                 Default = false,
                 Tooltip = "smoothly pulls your crosshair onto the closest enemy inside the fov circle",
+        })
+        AimGroup:AddDropdown("aimassist_mode", {
+                Values = { "auto", "mouse", "camera" },
+                Default = "auto",
+                Text = "aim mode",
+                Tooltip = "auto uses mouse movement on desktop and rotates the camera on touch devices - camera also works on desktop executors without mousemoverel",
         })
         AimGroup:AddSlider("aimassist_fov", { Text = "radius", Min = 0, Max = 1000, Default = 100, Rounding = 0, Suffix = "px" })
         AimGroup:AddDropdown("aimassist_fov_pos", {
@@ -10070,7 +10460,7 @@ do
         AimGroup:AddToggle("aimassist_right_click", {
                 Text = "require right click",
                 Default = false,
-                Tooltip = "only aim assist while you hold the right mouse button",
+                Tooltip = "only aim assist while holding the right mouse button - touch devices get an on-screen aim button instead",
         })
         AimGroup:AddDivider()
         AimGroup:AddToggle("aimassist_show_fov", {
@@ -10121,6 +10511,1274 @@ do
         end)
 
         maid(stop)
+end
+
+do
+        local SilentGroup = h2o.Tabs.combat:AddRightGroupbox("silent aim", "zap")
+
+        local R15Parts = {
+                "Head", "UpperTorso", "LowerTorso", "HumanoidRootPart",
+                "LeftUpperArm", "LeftLowerArm", "LeftHand",
+                "RightUpperArm", "RightLowerArm", "RightHand",
+                "LeftUpperLeg", "LeftLowerLeg", "LeftFoot",
+                "RightUpperLeg", "RightLowerLeg", "RightFoot",
+        }
+        local R15Limbs = {
+                "LeftUpperArm", "LeftLowerArm", "LeftHand",
+                "RightUpperArm", "RightLowerArm", "RightHand",
+                "LeftUpperLeg", "LeftLowerLeg", "LeftFoot",
+                "RightUpperLeg", "RightLowerLeg", "RightFoot",
+        }
+        local ManipOffsets = {
+                Vector3.new(0, 12, 0), Vector3.new(0, 16, 0), Vector3.new(0, 20, 0), Vector3.new(0, 24, 0),
+                Vector3.new(0, 28, 0), Vector3.new(0, 32, 0), Vector3.new(0, 36, 0), Vector3.new(0, 40, 0),
+        }
+
+        local sa = {
+                enabled = false,
+                hookInstalled = false,
+                hookMode = nil,
+                originalFireServer = nil,
+                originalNamecall = nil,
+                startShootingEnum = nil,
+                enumTried = false,
+                utility = nil,
+                connection = nil,
+                visualConnection = nil,
+                charConnection = nil,
+                gui = nil,
+                outlineFrame = nil,
+                outlineStroke = nil,
+                fillFrame = nil,
+                fillGradient = nil,
+                circle = nil,
+                fillPos = nil,
+                rayParams = nil,
+                rayBuilt = false,
+                katanaClass = nil,
+                katanaTried = false,
+                hookedKatana = false,
+                originalReplicate = nil,
+                deflecting = {},
+                lockedTarget = nil,
+                lockedPart = nil,
+                candidateTarget = nil,
+                candidateSince = 0,
+                lastSeen = 0,
+                targetPart = nil,
+        }
+
+        local rand = Random.new()
+
+        local function optionSet(id, name)
+                local opt = Options[id]
+                local value = opt and opt.Value
+                if type(value) ~= "table" then
+                        return false
+                end
+                return value[name] == true
+        end
+
+        local function removeVisuals()
+                if sa.circle then
+                        pcall(function()
+                                sa.circle.Visible = false
+                                sa.circle:Remove()
+                        end)
+                        sa.circle = nil
+                end
+                if sa.gui then
+                        pcall(function()
+                                sa.gui:Destroy()
+                        end)
+                        sa.gui = nil
+                        sa.outlineFrame = nil
+                        sa.outlineStroke = nil
+                        sa.fillFrame = nil
+                        sa.fillGradient = nil
+                end
+        end
+
+        local function ensureVisuals()
+                if not sa.gui then
+                        pcall(function()
+                                local gui = Instance.new("ScreenGui")
+                                gui.Name = "h2o_silentaim_fov"
+                                gui.IgnoreGuiInset = true
+                                gui.ResetOnSpawn = false
+                                gui.DisplayOrder = 1000000
+                                gui.ZIndexBehavior = Enum.ZIndexBehavior.Global
+                                gui.Parent = LocalPlayer:WaitForChild("PlayerGui")
+
+                                local fill = Instance.new("Frame")
+                                fill.AnchorPoint = Vector2.new(0.5, 0.5)
+                                fill.BackgroundColor3 = Color3.new(1, 1, 1)
+                                fill.BackgroundTransparency = 0.55
+                                fill.BorderSizePixel = 0
+                                fill.Visible = false
+                                fill.ZIndex = 1
+                                fill.Parent = gui
+
+                                local fillCorner = Instance.new("UICorner")
+                                fillCorner.CornerRadius = UDim.new(1, 0)
+                                fillCorner.Parent = fill
+
+                                local gradient = Instance.new("UIGradient")
+                                gradient.Rotation = 0
+                                gradient.Parent = fill
+
+                                local outline = Instance.new("Frame")
+                                outline.AnchorPoint = Vector2.new(0.5, 0.5)
+                                outline.BackgroundTransparency = 1
+                                outline.BorderSizePixel = 0
+                                outline.Visible = false
+                                outline.ZIndex = 2
+                                outline.Parent = gui
+
+                                local outlineCorner = Instance.new("UICorner")
+                                outlineCorner.CornerRadius = UDim.new(1, 0)
+                                outlineCorner.Parent = outline
+
+                                local stroke = Instance.new("UIStroke")
+                                stroke.Color = Color3.new(1, 1, 1)
+                                stroke.Thickness = 1
+                                stroke.ApplyStrokeMode = Enum.ApplyStrokeMode.Border
+                                stroke.Parent = outline
+
+                                sa.gui = gui
+                                sa.fillFrame = fill
+                                sa.fillGradient = gradient
+                                sa.outlineFrame = outline
+                                sa.outlineStroke = stroke
+                        end)
+                end
+                if not sa.circle and Drawing and not isTouchDevice then
+                        pcall(function()
+                                local circle = Drawing.new("Circle")
+                                circle.Filled = false
+                                circle.Color = Color3.new(1, 1, 1)
+                                circle.Radius = 100
+                                circle.Thickness = 2
+                                circle.Visible = false
+                                sa.circle = circle
+                        end)
+                end
+        end
+
+        local function getMuzzleScreenPosition(camera)
+                local muzzle = nil
+                pcall(function()
+                        local fighter = getLocalFighter()
+                        local item = fighter and fighter.EquippedItem
+                        if item and item.ViewModel and item.ViewModel.GetMuzzlePosition then
+                                muzzle = item.ViewModel:GetMuzzlePosition()
+                        end
+                end)
+                if not muzzle then
+                        pcall(function()
+                                local viewModels = workspace:FindFirstChild("ViewModels")
+                                if viewModels then
+                                        for _, model in viewModels:GetChildren() do
+                                                if model:IsA("Model") and model.Name:find(LocalPlayer.Name, 1, true) then
+                                                        local part = model:FindFirstChild("Muzzle", true)
+                                                                or model:FindFirstChild("Barrel", true)
+                                                                or model:FindFirstChild("Handle", true)
+                                                        if part and part:IsA("BasePart") then
+                                                                muzzle = part.Position
+                                                                break
+                                                        elseif part and part:IsA("Attachment") then
+                                                                muzzle = part.WorldPosition
+                                                                break
+                                                        end
+                                                end
+                                        end
+                                end
+                        end)
+                end
+                if muzzle and camera then
+                        local pos, visible = camera:WorldToViewportPoint(muzzle)
+                        if visible then
+                                return Vector2.new(pos.X, pos.Y)
+                        end
+                end
+                return nil
+        end
+
+        local function getFOVOrigin(targetPart)
+                local camera = workspace.CurrentCamera
+                local mode = Options.silentaim_fov_pos and Options.silentaim_fov_pos.Value or ""
+                local origin = nil
+                if mode == "position on target" and targetPart and targetPart.Position then
+                        local pos, visible = camera:WorldToViewportPoint(targetPart.Position)
+                        if visible then
+                                origin = Vector2.new(pos.X, pos.Y)
+                        end
+                end
+                if not origin and mode == "position on barrel" and camera then
+                        origin = getMuzzleScreenPosition(camera)
+                end
+                if not origin and camera then
+                        local viewport = camera.ViewportSize
+                        origin = Vector2.new(viewport.X / 2, viewport.Y / 2)
+                end
+                origin = origin or getAimScreenPosition()
+                return origin
+        end
+
+        local function tweenFovPos(target, dt)
+                if not sa.fillPos then
+                        sa.fillPos = target
+                        return target
+                end
+                local progress = math.clamp((dt or 0) / 0.18, 0, 1)
+                local alpha = TweenService:GetValue(progress, Enum.EasingStyle.Quad, Enum.EasingDirection.Out)
+                sa.fillPos = sa.fillPos:Lerp(target, alpha)
+                if (sa.fillPos - target).Magnitude < 0.1 then
+                        sa.fillPos = target
+                end
+                return sa.fillPos
+        end
+
+        local function ensureRayParams()
+                if sa.rayBuilt and sa.rayParams then
+                        return true
+                end
+                pcall(function()
+                        local params = RaycastParams.new()
+                        params.FilterType = Enum.RaycastFilterType.Exclude
+                        params.IgnoreWater = true
+                        sa.rayParams = params
+                end)
+                sa.rayBuilt = sa.rayParams ~= nil
+                return sa.rayBuilt
+        end
+
+        local function canSeeTarget(target)
+                if not target or not target:FindFirstChild("Head") then
+                        return false
+                end
+                local camera = workspace.CurrentCamera
+                local char = LocalPlayer.Character
+                if not camera or not char then
+                        return false
+                end
+                if not ensureRayParams() then
+                        return false
+                end
+                local myPos = camera.CFrame.Position
+                local targetPos = target.Head.Position
+                sa.rayParams.FilterDescendantsInstances = { char, target, camera }
+                local ok, ray = pcall(function()
+                        return workspace:Raycast(myPos, targetPos - myPos, sa.rayParams)
+                end)
+                if not ok then
+                        return false
+                end
+                return not ray or ray.Instance:IsDescendantOf(target)
+        end
+
+        local function isProtectedTarget(target)
+                if not target then
+                        return true
+                end
+                if target:FindFirstChild("InvincibilityParticles", true) then
+                        return true
+                end
+                local root = target:FindFirstChild("HumanoidRootPart")
+                if not root then
+                        return true
+                end
+                for _, obj in root:GetChildren() do
+                        if obj:IsA("Attachment") and obj.Name == "Attachment" then
+                                return true
+                        end
+                end
+                return false
+        end
+
+        local function isRiotShieldBlocked(target)
+                local player = typeof(target) == "Instance" and Players:GetPlayerFromCharacter(target) or nil
+                if not player then
+                        return false
+                end
+                local hasShield = false
+                pcall(function()
+                        for _, object in target:GetDescendants() do
+                                local lower = object.Name:lower()
+                                if lower:find("riot", 1, true) or lower:find("shield", 1, true) then
+                                        hasShield = true
+                                        break
+                                end
+                        end
+                end)
+                if not hasShield then
+                        return false
+                end
+                local targetRoot = target:FindFirstChild("HumanoidRootPart")
+                local myRoot = LocalPlayer.Character and LocalPlayer.Character:FindFirstChild("HumanoidRootPart")
+                if not targetRoot or not myRoot then
+                        return false
+                end
+                local offset = myRoot.Position - targetRoot.Position
+                return offset.Magnitude > 0 and targetRoot.CFrame.LookVector:Dot(offset.Unit) > 0
+        end
+
+        local function isFlashed()
+                local flash = false
+                pcall(function()
+                        if Lighting:FindFirstChild("Flashbang") then
+                                flash = true
+                                return
+                        end
+                        local playerGui = LocalPlayer:FindFirstChild("PlayerGui")
+                        if playerGui and playerGui:FindFirstChild("FlashbangGui") then
+                                flash = true
+                        end
+                end)
+                return flash
+        end
+
+        local function isLobby()
+                local lobby = false
+                pcall(function()
+                        local pg = LocalPlayer:FindFirstChild("PlayerGui")
+                        local main = pg and pg:FindFirstChild("MainGui")
+                        local frame = main and main:FindFirstChild("MainFrame")
+                        local lobbyFrame = frame and frame:FindFirstChild("Lobby")
+                        local currency = lobbyFrame and lobbyFrame:FindFirstChild("Currency")
+                        lobby = currency ~= nil and currency.Visible == true
+                end)
+                return lobby
+        end
+
+        local function shouldBlockShotForKatana(target)
+                local player = typeof(target) == "Instance" and Players:GetPlayerFromCharacter(target) or nil
+                local now = os.clock()
+                local expires = player and sa.deflecting[player.UserId] or nil
+                if expires and expires > now then
+                        return true
+                end
+                if player and expires then
+                        sa.deflecting[player.UserId] = nil
+                end
+                return false
+        end
+
+        local function setupKatanaTracker()
+                if sa.hookedKatana then
+                        return true
+                end
+                if sa.katanaTried then
+                        return false
+                end
+                sa.katanaTried = true
+                local class = nil
+                pcall(function()
+                        local playerScripts = LocalPlayer:FindFirstChild("PlayerScripts")
+                        local modules = playerScripts and playerScripts:FindFirstChild("Modules")
+                        local items = modules and modules:FindFirstChild("Items")
+                        local katanaScript = items and items:FindFirstChild("Katana")
+                        local mod = katanaScript and require(katanaScript)
+                        if type(mod) ~= "table" then
+                                return
+                        end
+                        local mt = getmetatable(mod)
+                        if type(mt) == "table" and type(rawget(mt, "ReplicateFromServer")) == "function" then
+                                class = mt
+                        elseif type(rawget(mod, "ReplicateFromServer")) == "function" then
+                                class = mod
+                        end
+                end)
+                if not class then
+                        return false
+                end
+                sa.katanaClass = class
+                local ok = pcall(function()
+                        local original = class.ReplicateFromServer
+                        sa.originalReplicate = original
+                        class.ReplicateFromServer = function(self, action, ...)
+                                pcall(function()
+                                        if type(self) ~= "table" then
+                                                return
+                                        end
+                                        local itemName = nil
+                                        pcall(function()
+                                                itemName = self.Name
+                                        end)
+                                        if itemName ~= "Katana" then
+                                                return
+                                        end
+                                        local actionStr = tostring(action)
+                                        pcall(function()
+                                                if type(self.FromEnum) == "function" then
+                                                        actionStr = tostring(self:FromEnum(action))
+                                                end
+                                        end)
+                                        actionStr = actionStr:lower()
+                                        if actionStr == "startaiming" or actionStr == "startblocking" or actionStr == "deflect" or actionStr == "startdeflect" or actionStr:find("deflect", 1, true) ~= nil then
+                                                local userId = nil
+                                                pcall(function()
+                                                        local fighter = self.ClientFighter
+                                                        local player = fighter and fighter.Player
+                                                        if player and player.UserId then
+                                                                userId = player.UserId
+                                                        end
+                                                end)
+                                                if not userId then
+                                                        pcall(function()
+                                                                userId = self:Get("ObjectID")
+                                                        end)
+                                                end
+                                                if userId then
+                                                        local duration = 1
+                                                        pcall(function()
+                                                                if self.Info and self.Info.DeflectDuration then
+                                                                        duration = self.Info.DeflectDuration
+                                                                end
+                                                        end)
+                                                        sa.deflecting[userId] = os.clock() + duration + 0.12
+                                                end
+                                        end
+                                end)
+                                return original(self, action, ...)
+                        end
+                end)
+                sa.hookedKatana = ok
+                return ok
+        end
+
+        local function shouldIgnoreTarget(target)
+                local root = target and target:FindFirstChild("HumanoidRootPart")
+                local hum = target and target:FindFirstChildOfClass("Humanoid")
+                if not root or not hum or hum.Health <= 0 then
+                        return true
+                end
+                if Toggles.silentaim_visible_only.Value and not canSeeTarget(target) then
+                        return true
+                end
+                if Toggles.silentaim_ignore_protected.Value and isProtectedTarget(target) then
+                        return true
+                end
+                if Toggles.silentaim_limit_distance.Value then
+                        local myRoot = LocalPlayer.Character and LocalPlayer.Character:FindFirstChild("HumanoidRootPart")
+                        local maxDist = (Options.silentaim_max_distance and Options.silentaim_max_distance.Value) or 250
+                        if not myRoot or (root.Position - myRoot.Position).Magnitude > maxDist then
+                                return true
+                        end
+                end
+                if optionSet("silentaim_ignore_if", "katana deflecting") and shouldBlockShotForKatana(target) then
+                        return true
+                end
+                if optionSet("silentaim_ignore_if", "blocked by riot shield") and isRiotShieldBlocked(target) then
+                        return true
+                end
+                return false
+        end
+
+        local function getAimParts(char)
+                local parts = {}
+                if not char then
+                        return parts
+                end
+                local blacklist = (Options.silentaim_blacklist and Options.silentaim_blacklist.Value) or {}
+                for _, name in ipairs(R15Parts) do
+                        if not blacklist[name] then
+                                local part = char:FindFirstChild(name)
+                                if part and part:IsA("BasePart") then
+                                        table.insert(parts, part)
+                                end
+                        end
+                end
+                return parts
+        end
+
+        local function getClosestPart(char, origin)
+                local camera = workspace.CurrentCamera
+                if not camera then
+                        return nil
+                end
+                local best, bestDist = nil, math.huge
+                for _, part in ipairs(getAimParts(char)) do
+                        local pos, visible = camera:WorldToViewportPoint(part.Position)
+                        if visible then
+                                local d = (Vector2.new(pos.X, pos.Y) - origin).Magnitude
+                                if d < bestDist then
+                                        best, bestDist = part, d
+                                end
+                        end
+                end
+                return best, bestDist
+        end
+
+        local function getTargetByPosition()
+                local myPos = nil
+                pcall(function()
+                        local char = LocalPlayer.Character
+                        local root = char and char:FindFirstChild("HumanoidRootPart")
+                        if root then
+                                myPos = root.Position
+                        end
+                end)
+                if not myPos then
+                        return nil, nil
+                end
+                local camera = workspace.CurrentCamera
+                if not camera then
+                        return nil, nil
+                end
+                local showFov = Toggles.silentaim_show_fov.Value == true
+                local radius = (Options.silentaim_radius and Options.silentaim_radius.Value) or 100
+                local best, bestPart = nil, nil
+                local dist = showFov and radius or math.huge
+                local origin = getFOVOrigin(nil)
+                for _, plr in ipairs(Players:GetPlayers()) do
+                        if plr ~= LocalPlayer then
+                                local char = plr.Character
+                                if char then
+                                        local hrp = char:FindFirstChild("HumanoidRootPart")
+                                        local hum = char:FindFirstChildOfClass("Humanoid")
+                                        if hrp and hum and hum.Health > 0 and not shouldIgnoreTarget(char) then
+                                                local part = nil
+                                                if Toggles.silentaim_closest_part.Value then
+                                                        part = getClosestPart(char, origin)
+                                                else
+                                                        local wanted = (Options.silentaim_target_part and Options.silentaim_target_part.Value) or "Head"
+                                                        part = char:FindFirstChild(wanted)
+                                                end
+                                                local d = math.huge
+                                                if part then
+                                                        if showFov then
+                                                                d = 0
+                                                                if Toggles.silentaim_closest_part.Value then
+                                                                        local pos, visible = camera:WorldToViewportPoint(part.Position)
+                                                                        if visible then
+                                                                                d = (Vector2.new(pos.X, pos.Y) - origin).Magnitude
+                                                                        end
+                                                                end
+                                                        else
+                                                                d = (hrp.Position - myPos).Magnitude
+                                                        end
+                                                end
+                                                if part and d < dist then
+                                                        best = char
+                                                        bestPart = part
+                                                        dist = d
+                                                end
+                                        end
+                                end
+                        end
+                end
+                return best, bestPart
+        end
+
+        local function getTargetByMouse()
+                local camera = workspace.CurrentCamera
+                if not camera then
+                        return nil, nil
+                end
+                local mouse = getFOVOrigin(nil)
+                local showFov = Toggles.silentaim_show_fov.Value == true
+                local radius = (Options.silentaim_radius and Options.silentaim_radius.Value) or 100
+                local best, bestPart = nil, nil
+                local dist = showFov and radius or math.huge
+                for _, plr in ipairs(Players:GetPlayers()) do
+                        if plr ~= LocalPlayer then
+                                local char = plr.Character
+                                if char then
+                                        local hum = char:FindFirstChildOfClass("Humanoid")
+                                        if hum and hum.Health > 0 and not shouldIgnoreTarget(char) then
+                                                local part = nil
+                                                if Toggles.silentaim_closest_part.Value then
+                                                        part = getClosestPart(char, mouse)
+                                                else
+                                                        local wanted = (Options.silentaim_target_part and Options.silentaim_target_part.Value) or "Head"
+                                                        part = char:FindFirstChild(wanted)
+                                                end
+                                                if part then
+                                                        local pos, visible = camera:WorldToViewportPoint(part.Position)
+                                                        if visible then
+                                                                local d = (Vector2.new(pos.X, pos.Y) - mouse).Magnitude
+                                                                if d < dist then
+                                                                        best = char
+                                                                        bestPart = part
+                                                                        dist = d
+                                                                end
+                                                        end
+                                                end
+                                        end
+                                end
+                        end
+                end
+                return best, bestPart
+        end
+
+        local function getTarget()
+                sa.targetPart = nil
+                if isShootingRange() then
+                        sa.lockedTarget = nil
+                        sa.lockedPart = nil
+                        sa.candidateTarget = nil
+                        return nil
+                end
+                if Toggles.silentaim_disable_on_flash.Value and isFlashed() then
+                        sa.lockedTarget = nil
+                        sa.lockedPart = nil
+                        sa.candidateTarget = nil
+                        return nil
+                end
+                local target, part
+                if (Options.silentaim_fov_pos and Options.silentaim_fov_pos.Value or "") == "position on target" then
+                        target, part = getTargetByPosition()
+                else
+                        target, part = getTargetByMouse()
+                end
+                local now = os.clock()
+                if target then
+                        if target ~= sa.candidateTarget then
+                                sa.candidateTarget = target
+                                sa.candidateSince = now
+                        end
+                        local reaction = ((Options.silentaim_reaction and Options.silentaim_reaction.Value) or 0) / 1000
+                        if target == sa.lockedTarget or now - sa.candidateSince >= reaction then
+                                sa.lockedTarget = target
+                                sa.lockedPart = part
+                                sa.lastSeen = now
+                        end
+                else
+                        sa.candidateTarget = nil
+                end
+                local forget = (Options.silentaim_forget and Options.silentaim_forget.Value) or 0
+                if sa.lockedTarget and now - sa.lastSeen <= forget then
+                        local hum = sa.lockedTarget:FindFirstChildOfClass("Humanoid")
+                        if hum and hum.Health > 0 and sa.lockedPart and sa.lockedPart.Parent == sa.lockedTarget then
+                                sa.targetPart = sa.lockedPart
+                                return sa.lockedTarget
+                        end
+                end
+                if not target or target ~= sa.lockedTarget then
+                        sa.targetPart = nil
+                        return nil
+                end
+                sa.targetPart = sa.lockedPart or part
+                return sa.lockedTarget
+        end
+
+        local function isInCircleRange(target)
+                if not Toggles.silentaim_show_fov.Value then
+                        return true
+                end
+                if not target or not target:FindFirstChild("Head") then
+                        return false
+                end
+                local camera = workspace.CurrentCamera
+                if not camera then
+                        return false
+                end
+                local part = sa.targetPart or target:FindFirstChild("Head")
+                local pos, visible = camera:WorldToViewportPoint(part.Position)
+                if not visible then
+                        return false
+                end
+                local mouse = getFOVOrigin(nil)
+                local radius = (Options.silentaim_radius and Options.silentaim_radius.Value) or 100
+                return (Vector2.new(pos.X, pos.Y) - mouse).Magnitude <= radius
+        end
+
+        local function getPredictedPosition(part)
+                local velocity = Vector3.zero
+                pcall(function()
+                        velocity = part.AssemblyLinearVelocity or Vector3.zero
+                end)
+                local lead = math.clamp(velocity.Magnitude / 350, 0, 0.12)
+                local pred = part.Position + velocity * lead
+                if math.abs(velocity.Y) > 2 then
+                        pred = pred + Vector3.new(0, velocity.Y * math.min(lead, 0.05), 0)
+                end
+                return pred
+        end
+
+        local function calculateManipPoint(fromPos, targetPos, targetChar)
+                if not ensureRayParams() then
+                        return nil
+                end
+                local exclude = {}
+                if LocalPlayer.Character then
+                        table.insert(exclude, LocalPlayer.Character)
+                end
+                if targetChar then
+                        table.insert(exclude, targetChar)
+                end
+                sa.rayParams.FilterDescendantsInstances = exclude
+                local blocked = false
+                pcall(function()
+                        blocked = workspace:Raycast(fromPos, targetPos - fromPos, sa.rayParams) ~= nil
+                end)
+                if not blocked then
+                        return fromPos
+                end
+                for _, offset in ipairs(ManipOffsets) do
+                        local scanPos = fromPos + offset
+                        local clear = false
+                        pcall(function()
+                                clear = workspace:Raycast(scanPos, targetPos - scanPos, sa.rayParams) == nil
+                        end)
+                        if clear then
+                                return scanPos
+                        end
+                end
+                return nil
+        end
+
+        local function buildCameraData(fromPos, part)
+                if not sa.utility or not part then
+                        return nil
+                end
+                local ok, data = pcall(function()
+                        local aimPosition = getPredictedPosition(part)
+                        local look = CFrame.new(fromPos, aimPosition)
+                        local packed = {}
+                        packed[utf8.char(1)] = {
+                                [utf8.char(0)] = sa.utility:EncodeCFrame(look),
+                                [utf8.char(1)] = sa.utility:EncodeCFrame(look),
+                                [utf8.char(2)] = part,
+                                [utf8.char(3)] = sa.utility:EncodeCFrame(part.CFrame:ToObjectSpace(CFrame.new(aimPosition))),
+                        }
+                        return packed
+                end)
+                return ok and data or nil
+        end
+
+        local function tryAutoReload(item, fighter)
+                if not Toggles.silentaim_auto_reload.Value then
+                        return false
+                end
+                if not item then
+                        return false
+                end
+                if fighter and type(fighter.Get) == "function" then
+                        local reloading = false
+                        pcall(function()
+                                reloading = fighter:Get("Reloading") == true
+                        end)
+                        if reloading then
+                                return true
+                        end
+                end
+                local ammo = nil
+                pcall(function()
+                        if type(item.Get) == "function" then
+                                ammo = item:Get("Ammo")
+                        end
+                end)
+                if type(ammo) ~= "number" or ammo > 0 then
+                        return false
+                end
+                local reserve = nil
+                pcall(function()
+                        if type(item.Get) == "function" then
+                                reserve = item:Get("AmmoReserve")
+                        end
+                end)
+                if reserve ~= nil and reserve <= 0 then
+                        local infinite = false
+                        pcall(function()
+                                if fighter and type(fighter.Get) == "function" then
+                                        infinite = fighter:Get("InfiniteAmmoReserve") == true
+                                end
+                        end)
+                        if not infinite then
+                                return false
+                        end
+                end
+                local reloaded = false
+                pcall(function()
+                        if type(item.SimulateInputFromGameplayMechanic) == "function" then
+                                local started = item.SimulateInputFromGameplayMechanic(item, "StartReloading")
+                                reloaded = started ~= false
+                        end
+                end)
+                if not reloaded and fighter and type(fighter.Input) == "function" then
+                        pcall(function()
+                                local started = fighter.Input(fighter, "StartReloading")
+                                reloaded = started ~= false
+                        end)
+                end
+                if not reloaded and type(item.StartReloading) == "function" then
+                        pcall(function()
+                                reloaded = item.StartReloading(item) == true
+                        end)
+                end
+                return reloaded
+        end
+
+        local function getUseItemRemote()
+                local node = remote("Remotes", "Replication", "Fighter", "UseItem")
+                if node and node:IsA("RemoteEvent") then
+                        return node
+                end
+                return nil
+        end
+
+        local function getStartShootingEnum()
+                if not sa.enumTried then
+                        sa.enumTried = true
+                        pcall(function()
+                                local enums = require(game:GetService("ReplicatedStorage").Modules.EnumLibrary)
+                                if type(enums) == "table" and type(enums.ToEnum) == "function" then
+                                        sa.startShootingEnum = enums:ToEnum("StartShooting")
+                                end
+                        end)
+                end
+                return sa.startShootingEnum
+        end
+
+        local function onVisualStep(dt)
+                if h2o.Unloaded then
+                        return
+                end
+                pcall(function()
+                        local showFov = Toggles.silentaim_show_fov.Value == true
+                        local radius = (Options.silentaim_radius and Options.silentaim_radius.Value) or 100
+                        local mode = (Options.silentaim_fov_pos and Options.silentaim_fov_pos.Value) or ""
+                        local fovTarget = nil
+                        if mode == "position on target" and sa.targetPart then
+                                fovTarget = sa.targetPart
+                        end
+                        local fovPos = tweenFovPos(getFOVOrigin(fovTarget), dt)
+                        local outlineOn = Toggles.silentaim_outline.Value == true
+                        local outlineColor = Options.silentaim_outline_color.Value or Color3.new(1, 1, 1)
+                        if sa.circle then
+                                sa.circle.Position = fovPos
+                                sa.circle.Visible = showFov
+                                sa.circle.Radius = radius
+                                sa.circle.Color = outlineColor
+                                sa.circle.Thickness = outlineOn and 2 or 1
+                        elseif sa.outlineFrame then
+                                sa.outlineFrame.Position = UDim2.fromOffset(fovPos.X, fovPos.Y)
+                                sa.outlineFrame.Size = UDim2.fromOffset(radius * 2, radius * 2)
+                                sa.outlineFrame.Visible = showFov
+                                sa.outlineStroke.Color = outlineColor
+                                sa.outlineStroke.Thickness = outlineOn and 2 or 1
+                        end
+                        if sa.fillFrame and sa.fillGradient then
+                                local fillOn = showFov and Toggles.silentaim_fill.Value == true
+                                sa.fillFrame.Visible = fillOn
+                                if fillOn then
+                                        sa.fillFrame.Position = UDim2.fromOffset(fovPos.X, fovPos.Y)
+                                        sa.fillFrame.Size = UDim2.fromOffset(radius * 2, radius * 2)
+                                        local fillColor = Options.silentaim_fill_color.Value or Color3.new(1, 1, 1)
+                                        sa.fillGradient.Color = ColorSequence.new({
+                                                ColorSequenceKeypoint.new(0, fillColor),
+                                                ColorSequenceKeypoint.new(1, fillColor:Lerp(Color3.new(1, 1, 1), 0.65)),
+                                        })
+                                        local rotation = Options.silentaim_rotation.Value or 0
+                                        if Toggles.silentaim_spin.Value then
+                                                rotation += os.clock() * 360 * (Options.silentaim_rot_speed.Value or 1)
+                                        end
+                                        sa.fillGradient.Rotation = rotation % 360
+                                end
+                        end
+                end)
+        end
+
+        local function onAutoFire()
+                if h2o.Unloaded or Library.Toggled then
+                        return
+                end
+                if not sa.enabled or not Toggles.silentaim_auto_shoot.Value then
+                        return
+                end
+                pcall(function()
+                        if not LocalPlayer.Character then
+                                return
+                        end
+                        if isLobby() then
+                                return
+                        end
+                        local root = LocalPlayer.Character:FindFirstChild("HumanoidRootPart")
+                        if not root then
+                                return
+                        end
+                        local fighter = getLocalFighter()
+                        if not fighter then
+                                return
+                        end
+                        local item = fighter.EquippedItem
+                        if not item then
+                                return
+                        end
+                        if tryAutoReload(item, fighter) then
+                                return
+                        end
+                        local targetChar = getTarget()
+                        local targetPart = sa.targetPart
+                        if not targetPart or not targetChar then
+                                return
+                        end
+                        if not isInCircleRange(targetChar) then
+                                return
+                        end
+                        local camera = workspace.CurrentCamera
+                        local shootPos = camera and camera.CFrame.Position or targetPart.Position
+                        if Toggles.silentaim_manipulation.Value then
+                                local manip = calculateManipPoint(shootPos, targetPart.Position, targetChar)
+                                if manip then
+                                        shootPos = manip
+                                end
+                        end
+                        local cameradata = buildCameraData(shootPos, targetPart)
+                        if not cameradata then
+                                return
+                        end
+                        local useItem = getUseItemRemote()
+                        if not useItem then
+                                return
+                        end
+                        local objectId = nil
+                        pcall(function()
+                                if type(item.Get) == "function" then
+                                        objectId = item:Get("ObjectID")
+                                end
+                        end)
+                        if not objectId then
+                                return
+                        end
+                        useItem:FireServer(objectId, getStartShootingEnum(), cameradata, nil)
+                end)
+        end
+
+        local function redirectShot(packed)
+                local startEnum = getStartShootingEnum()
+                if startEnum == nil or packed[2] ~= startEnum then
+                        return false
+                end
+                local suppress = false
+                pcall(function()
+                        if isLobby() then
+                                return
+                        end
+                        local fighter = getLocalFighter()
+                        local item = fighter and fighter.EquippedItem
+                        if tryAutoReload(item, fighter) then
+                                suppress = true
+                                return
+                        end
+                        local hitChance = (Options.silentaim_hitchance and Options.silentaim_hitchance.Value) or 100
+                        if rand:NextNumber(0, 100) > hitChance then
+                                return
+                        end
+                        local target = getTarget()
+                        if not target or not target:FindFirstChild("Head") or not target:FindFirstChild("HumanoidRootPart") then
+                                return
+                        end
+                        if not isInCircleRange(target) then
+                                return
+                        end
+                        local aimPart = sa.targetPart
+                        if not aimPart and Toggles.silentaim_closest_part.Value then
+                                aimPart = getClosestPart(target, getFOVOrigin(nil))
+                        end
+                        if not aimPart then
+                                local headshot = (Options.silentaim_headshot and Options.silentaim_headshot.Value) or 65
+                                aimPart = (rand:NextNumber(0, 100) <= headshot) and target.Head or target.HumanoidRootPart
+                        end
+                        aimPart = aimPart or target.Head or target.HumanoidRootPart
+                        local camera = workspace.CurrentCamera
+                        local fromPos = camera and camera.CFrame.Position or aimPart.Position
+                        if Toggles.silentaim_manipulation.Value then
+                                local manip = calculateManipPoint(fromPos, aimPart.Position, target)
+                                if manip then
+                                        fromPos = manip
+                                end
+                        end
+                        local data = buildCameraData(fromPos, aimPart)
+                        if data then
+                                packed[3] = data
+                        end
+                end)
+                return suppress
+        end
+
+        local function stop()
+                if sa.connection then
+                        pcall(function()
+                                sa.connection:Disconnect()
+                        end)
+                        sa.connection = nil
+                end
+                if sa.visualConnection then
+                        pcall(function()
+                                sa.visualConnection:Disconnect()
+                        end)
+                        sa.visualConnection = nil
+                end
+                if sa.charConnection then
+                        pcall(function()
+                                sa.charConnection:Disconnect()
+                        end)
+                        sa.charConnection = nil
+                end
+                sa.enabled = false
+                sa.lockedTarget = nil
+                sa.lockedPart = nil
+                sa.candidateTarget = nil
+                sa.targetPart = nil
+                sa.fillPos = nil
+                removeVisuals()
+        end
+
+        local function start()
+                if sa.enabled then
+                        return
+                end
+                if not getStartShootingEnum() then
+                        notify("silent aim - action enum unavailable", 6)
+                        return
+                end
+                local useItem = getUseItemRemote()
+                if not useItem then
+                        notify("silent aim - UseItem remote not found", 6)
+                        return
+                end
+                if not sa.hookInstalled then
+                        local hasNamecall = type(hookmetamethod) == "function" and type(getnamecallmethod) == "function"
+                        local hasHookFn = type(hookfunction) == "function"
+                        if not hasNamecall and not hasHookFn then
+                                notify("silent aim - hooks unavailable, auto shoot mode still works", 6)
+                        end
+                        if not sa.hookInstalled and hasNamecall then
+                                local hookOk = pcall(function()
+                                        local oldNamecall
+                                        local handler = function(self, ...)
+                                                if sa.enabled and self == useItem and getnamecallmethod() == "FireServer" then
+                                                        local packed = table.pack(...)
+                                                        local suppress = false
+                                                        pcall(function()
+                                                                suppress = redirectShot(packed)
+                                                        end)
+                                                        if suppress then
+                                                                return nil
+                                                        end
+                                                        return oldNamecall(self, table.unpack(packed, 1, packed.n))
+                                                end
+                                                return oldNamecall(self, ...)
+                                        end
+                                        local wrapped = handler
+                                        pcall(function()
+                                                if type(newcclosure) == "function" then
+                                                        wrapped = newcclosure(handler)
+                                                end
+                                        end)
+                                        oldNamecall = hookmetamethod(game, "__namecall", wrapped)
+                                        sa.originalNamecall = oldNamecall
+                                end)
+                                if hookOk and sa.originalNamecall then
+                                        sa.hookMode = "namecall"
+                                        sa.hookInstalled = true
+                                else
+                                        notify("silent aim - namecall hook failed", 6)
+                                end
+                        end
+                        if not sa.hookInstalled and hasHookFn then
+                                local hookOk = pcall(function()
+                                        sa.originalFireServer = useItem.FireServer
+                                        local handler = function(self, obj, action, cameradata, ...)
+                                                if sa.enabled then
+                                                        local packed = table.pack(obj, action, cameradata, ...)
+                                                        local suppress = false
+                                                        pcall(function()
+                                                                suppress = redirectShot(packed)
+                                                        end)
+                                                        if suppress then
+                                                                return nil
+                                                        end
+                                                        return sa.originalFireServer(self, table.unpack(packed, 1, packed.n))
+                                                end
+                                                return sa.originalFireServer(self, obj, action, cameradata, ...)
+                                        end
+                                        local wrapped = handler
+                                        pcall(function()
+                                                if type(newcclosure) == "function" then
+                                                        wrapped = newcclosure(handler)
+                                                end
+                                        end)
+                                        hookfunction(useItem.FireServer, wrapped)
+                                end)
+                                if hookOk then
+                                        sa.hookMode = "fire"
+                                        sa.hookInstalled = true
+                                else
+                                        notify("silent aim - hook install failed", 6)
+                                end
+                        end
+                end
+                pcall(function()
+                        sa.utility = require(game:GetService("ReplicatedStorage").Modules.Utility)
+                end)
+                sa.enabled = true
+                ensureVisuals()
+                sa.visualConnection = RunService.RenderStepped:Connect(onVisualStep)
+                sa.connection = RunService.Heartbeat:Connect(onAutoFire)
+                sa.charConnection = LocalPlayer.CharacterAdded:Connect(function()
+                        sa.lockedTarget = nil
+                        sa.lockedPart = nil
+                        sa.candidateTarget = nil
+                        sa.targetPart = nil
+                end)
+                if optionSet("silentaim_ignore_if", "katana deflecting") then
+                        pcall(setupKatanaTracker)
+                end
+        end
+
+        SilentGroup:AddToggle("silentaim_enabled", {
+                Text = "enabled",
+                Default = false,
+                Tooltip = "redirects your shots to the locked target by rewriting the camera data the server trusts",
+        })
+        SilentGroup:AddSlider("silentaim_hitchance", { Text = "hit chance", Min = 0, Max = 100, Default = 100, Rounding = 0, Suffix = "%" })
+        SilentGroup:AddSlider("silentaim_headshot", { Text = "headshot chance", Min = 0, Max = 100, Default = 65, Rounding = 0, Suffix = "%" })
+        SilentGroup:AddDropdown("silentaim_target_part", {
+                Values = R15Parts,
+                Default = "Head",
+                Text = "target part",
+                Tooltip = "the body part shots are redirected to when closest part is off",
+        })
+        SilentGroup:AddToggle("silentaim_closest_part", {
+                Text = "closest part",
+                Default = false,
+                Tooltip = "aims at whichever visible body part is nearest your crosshair",
+        })
+        SilentGroup:AddDropdown("silentaim_blacklist", {
+                Values = R15Parts,
+                Default = R15Limbs,
+                Multi = true,
+                Text = "closest part blacklist",
+                Tooltip = "limbs are blacklisted by default so closest part only picks head, torso or root",
+        })
+        SilentGroup:AddToggle("silentaim_visible_only", {
+                Text = "visible only",
+                Default = false,
+                Tooltip = "never targets enemies blocked by walls or cover",
+        })
+        SilentGroup:AddToggle("silentaim_ignore_protected", {
+                Text = "ignore protected",
+                Default = false,
+                Tooltip = "skips spawn-protected enemies",
+        })
+        SilentGroup:AddDropdown("silentaim_ignore_if", {
+                Values = { "katana deflecting", "blocked by riot shield" },
+                Default = { "katana deflecting", "blocked by riot shield" },
+                Multi = true,
+                Text = "ignore if",
+                Tooltip = "katana deflecting skips enemies mid-deflect - riot shield skips enemies facing you behind a shield",
+        })
+        SilentGroup:AddToggle("silentaim_disable_on_flash", {
+                Text = "disable on flash",
+                Default = false,
+                Tooltip = "stops targeting while you are flashed",
+        })
+        SilentGroup:AddToggle("silentaim_limit_distance", {
+                Text = "limit distance",
+                Default = false,
+                Tooltip = "only target enemies within max distance",
+        })
+        SilentGroup:AddSlider("silentaim_max_distance", { Text = "max distance", Min = 10, Max = 1000, Default = 250, Rounding = 0, Suffix = "studs" })
+        SilentGroup:AddSlider("silentaim_reaction", { Text = "reaction time", Min = 0, Max = 1000, Default = 0, Rounding = 0, Suffix = "ms" })
+        SilentGroup:AddSlider("silentaim_forget", { Text = "forget time", Min = 0, Max = 10, Default = 1, Rounding = 1, Suffix = "s" })
+        SilentGroup:AddToggle("silentaim_manipulation", {
+                Text = "manipulation",
+                Default = false,
+                Tooltip = "scans above your camera for a clear sightline so shots bend around cover",
+        })
+        SilentGroup:AddToggle("silentaim_auto_shoot", {
+                Text = "auto shoot",
+                Default = false,
+                Tooltip = "fires at the locked target automatically whenever you have a target in range",
+        })
+        SilentGroup:AddToggle("silentaim_auto_reload", {
+                Text = "auto reload",
+                Default = true,
+                Tooltip = "reloads for you when the magazine runs dry instead of firing blanks",
+        })
+        SilentGroup:AddDivider()
+        SilentGroup:AddToggle("silentaim_show_fov", {
+                Text = "show fov",
+                Default = true,
+                Tooltip = "draws the fov circle - while on, only targets inside the circle are aimed at",
+        })
+        SilentGroup:AddSlider("silentaim_radius", { Text = "radius", Min = 10, Max = 1000, Default = 100, Rounding = 0, Suffix = "px" })
+        SilentGroup:AddDropdown("silentaim_fov_pos", {
+                Values = { "", "position on target", "position on barrel" },
+                Default = "",
+                Text = "fov anchor",
+                Tooltip = "where the fov circle sits - screen center, locked onto the last target, or your weapon muzzle",
+        })
+        SilentGroup:AddToggle("silentaim_outline", {
+                Text = "outline",
+                Default = false,
+                Tooltip = "thicker circle outline",
+        })
+        SilentGroup:AddToggle("silentaim_fill", {
+                Text = "fill",
+                Default = false,
+                Tooltip = "fills the fov circle with a colored gradient",
+        })
+        SilentGroup:AddToggle("silentaim_spin", {
+                Text = "moving rotation",
+                Default = false,
+                Tooltip = "spins the fill gradient continuously",
+        })
+        SilentGroup:AddSlider("silentaim_rotation", { Text = "rotation", Min = 0, Max = 360, Default = 0, Rounding = 0, Suffix = "°" })
+        SilentGroup:AddSlider("silentaim_rot_speed", { Text = "rotation speed", Min = 1, Max = 10, Default = 1, Rounding = 1, Suffix = "rps" })
+        SilentGroup:AddLabel("outline color"):AddColorPicker("silentaim_outline_color", {
+                Default = Color3.fromRGB(255, 255, 255),
+                Title = "outline color",
+        })
+        SilentGroup:AddLabel("fill color"):AddColorPicker("silentaim_fill_color", {
+                Default = Color3.fromRGB(255, 255, 255),
+                Title = "fill color",
+        })
+
+        Toggles.silentaim_enabled:OnChanged(function()
+                if Toggles.silentaim_enabled.Value then
+                        start()
+                else
+                        stop()
+                end
+        end)
+
+        Options.silentaim_target_part:OnChanged(function()
+                sa.lockedTarget = nil
+                sa.lockedPart = nil
+        end)
+
+        Options.silentaim_fov_pos:OnChanged(function()
+                sa.targetPart = nil
+        end)
+
+        maid(function()
+                stop()
+                if sa.hookedKatana and sa.katanaClass and sa.originalReplicate then
+                        pcall(function()
+                                sa.katanaClass.ReplicateFromServer = sa.originalReplicate
+                        end)
+                end
+                table.clear(sa.deflecting)
+                if sa.hookMode == "namecall" and sa.originalNamecall and type(hookmetamethod) == "function" then
+                        pcall(function()
+                                hookmetamethod(game, "__namecall", sa.originalNamecall)
+                        end)
+                elseif sa.hookMode == "fire" and sa.originalFireServer and type(hookfunction) == "function" then
+                        pcall(function()
+                                local useItem = getUseItemRemote()
+                                if useItem then
+                                        hookfunction(useItem.FireServer, sa.originalFireServer)
+                                end
+                        end)
+                end
+                sa.hookMode = nil
+                sa.hookInstalled = false
+        end)
 end
 
 do
