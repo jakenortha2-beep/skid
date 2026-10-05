@@ -186,6 +186,16 @@ local function remote(...)
         return node
 end
 
+local h2oRawFireServer = nil
+pcall(function()
+        if type(clonefn) == "function" then
+                h2oRawFireServer = clonefn(Instance.new("RemoteEvent").FireServer)
+        end
+end)
+if type(h2oRawFireServer) ~= "function" then
+        h2oRawFireServer = Instance.new("RemoteEvent").FireServer
+end
+
 local function maid(item)
         table.insert(h2o.Maid, item)
 end
@@ -10544,10 +10554,13 @@ do
 
         local sa = {
                 enabled = false,
-                hookInstalled = false,
                 hookMode = nil,
+                inputHooked = false,
+                inputRestore = nil,
+                namecallHooked = false,
                 originalNamecall = nil,
-                hookTargets = {},
+                useItem = nil,
+                lastHookTry = 0,
                 seenCount = 0,
                 rewiredCount = 0,
                 statusLabel = nil,
@@ -11394,9 +11407,18 @@ do
                 end)
         end
 
+        local installInputHook = nil
+
         local function onAutoFire()
                 if h2o.Unloaded or Library.Toggled then
                         return
+                end
+                if sa.enabled and not sa.inputHooked and sa.hookMode == nil and os.clock() - sa.lastHookTry > 3 then
+                        sa.lastHookTry = os.clock()
+                        if installInputHook() then
+                                sa.hookMode = "input"
+                                notify("silent aim - input hook active", 4)
+                        end
                 end
                 if not sa.enabled or not Toggles.silentaim_auto_shoot.Value then
                         return
@@ -11471,54 +11493,81 @@ do
                 end
                 sa.lastLabelAt = now
                 pcall(function()
-                        label:SetText(string.format("net: seen %d - redirected %d", sa.seenCount, sa.rewiredCount))
+                        label:SetText(string.format("net[%s]: seen %d - redirected %d", tostring(sa.hookMode or "off"), sa.seenCount, sa.rewiredCount))
                 end)
         end
 
-        local function rewriteCameraDataInPlace(data, fromPos, aimPart)
-                if type(data) ~= "table" or not sa.utility then
-                        return false
-                end
-                local inner = rawget(data, utf8.char(1))
-                if type(inner) ~= "table" then
-                        return false
-                end
-                if rawget(inner, utf8.char(0)) == nil or rawget(inner, utf8.char(3)) == nil then
-                        return false
-                end
-                local ok = pcall(function()
-                        local aimPosition = getPredictedPosition(aimPart)
-                        local look = CFrame.new(fromPos, aimPosition)
-                        local encoded = sa.utility:EncodeCFrame(look)
-                        rawset(inner, utf8.char(0), encoded)
-                        rawset(inner, utf8.char(1), encoded)
-                        rawset(inner, utf8.char(2), aimPart)
-                        rawset(inner, utf8.char(3), sa.utility:EncodeCFrame(aimPart.CFrame:ToObjectSpace(CFrame.new(aimPosition))))
+        local function buildLookCFrame(fromPos, aimPos)
+                local look = nil
+                pcall(function()
+                        look = CFrame.lookAt(fromPos, aimPos)
                 end)
-                return ok
+                if not look then
+                        pcall(function()
+                                look = CFrame.new(fromPos, aimPos)
+                        end)
+                end
+                return look
         end
 
-        local function redirectShot(packed)
-                local startEnum = getStartShootingEnum()
-                local action = packed[2]
-                local actionMatch = false
-                if startEnum ~= nil and action == startEnum then
-                        actionMatch = true
-                elseif type(action) == "string" and #action == 1 and string.byte(action) == 26 then
-                        actionMatch = true
+        local function encodeCFrameSafe(cframe)
+                if not sa.utility or type(sa.utility.EncodeCFrame) ~= "function" then
+                        return nil
                 end
-                if not actionMatch then
-                        return false
+                local ok, encoded = pcall(function()
+                        return sa.utility:EncodeCFrame(cframe)
+                end)
+                if ok and type(encoded) == "string" and #encoded > 0 then
+                        return encoded
                 end
-                local suppress = false
+                return nil
+        end
+
+        local function decodeCFrameSafe(encoded)
+                if type(encoded) ~= "string" or not sa.utility or type(sa.utility.DecodeCFrame) ~= "function" then
+                        return nil
+                end
+                local ok, decoded = pcall(function()
+                        return sa.utility:DecodeCFrame(encoded)
+                end)
+                if ok and typeof(decoded) == "CFrame" then
+                        return decoded
+                end
+                return nil
+        end
+
+        local function pickAimPart(target)
+                local aimPart = sa.targetPart
+                if not aimPart and Toggles.silentaim_closest_part.Value then
+                        aimPart = getClosestPart(target, getFOVOrigin(nil))
+                end
+                if not aimPart then
+                        local headshot = (Options.silentaim_headshot and Options.silentaim_headshot.Value) or 65
+                        aimPart = (rand:NextNumber(0, 100) <= headshot) and target.Head or target.HumanoidRootPart
+                end
+                return aimPart or target.Head or target.HumanoidRootPart
+        end
+
+        local function processOutgoingUseItem(objectId, actionType, actionArgs)
+                if not sa.enabled or h2o.Unloaded then
+                        return
+                end
+                local isShot = false
+                local enum = getStartShootingEnum()
+                if enum ~= nil and actionType == enum then
+                        isShot = true
+                elseif type(actionType) == "string" and #actionType == 1 and string.byte(actionType) == 26 then
+                        isShot = true
+                end
+                if not isShot or type(actionArgs) ~= "table" then
+                        return
+                end
                 pcall(function()
                         if isLobby() then
                                 return
                         end
-                        local fighter = getLocalFighter()
-                        local item = fighter and fighter.EquippedItem
-                        if tryAutoReload(item, fighter) then
-                                suppress = true
+                        local inner = actionArgs[utf8.char(1)]
+                        if type(inner) ~= "table" then
                                 return
                         end
                         local hitChance = (Options.silentaim_hitchance and Options.silentaim_hitchance.Value) or 100
@@ -11532,116 +11581,267 @@ do
                         if not isInCircleRange(target) then
                                 return
                         end
-                        local aimPart = sa.targetPart
-                        if not aimPart and Toggles.silentaim_closest_part.Value then
-                                aimPart = getClosestPart(target, getFOVOrigin(nil))
-                        end
+                        local aimPart = pickAimPart(target)
                         if not aimPart then
-                                local headshot = (Options.silentaim_headshot and Options.silentaim_headshot.Value) or 65
-                                aimPart = (rand:NextNumber(0, 100) <= headshot) and target.Head or target.HumanoidRootPart
+                                return
                         end
-                        aimPart = aimPart or target.Head or target.HumanoidRootPart
+                        local aimPosition = getPredictedPosition(aimPart)
                         local camera = workspace.CurrentCamera
-                        local fromPos = camera and camera.CFrame.Position or aimPart.Position
-                        if Toggles.silentaim_manipulation.Value then
-                                local manip = calculateManipPoint(fromPos, aimPart.Position, target)
-                                if manip then
-                                        fromPos = manip
+                        local cameraPos = camera and camera.CFrame.Position or nil
+                        local manipPos = nil
+                        if Toggles.silentaim_manipulation.Value and cameraPos then
+                                manipPos = calculateManipPoint(cameraPos, aimPart.Position, target)
+                        end
+                        local originPos = manipPos or cameraPos
+                        local dirPos = manipPos or cameraPos
+                        if not manipPos then
+                                local d0 = decodeCFrameSafe(rawget(inner, utf8.char(0)))
+                                local d1 = decodeCFrameSafe(rawget(inner, utf8.char(1)))
+                                if d0 then
+                                        originPos = d0.Position
+                                end
+                                if d1 then
+                                        dirPos = d1.Position
                                 end
                         end
-                        if rewriteCameraDataInPlace(packed[3], fromPos, aimPart) then
-                                sa.rewiredCount += 1
-                                if sa.rewiredCount == 1 then
-                                        notify("silent aim - first shot redirected", 4)
-                                end
-                                refreshStatusLabel()
-                        else
-                                local data = buildCameraData(fromPos, aimPart)
-                                if data then
-                                        packed[3] = data
-                                        sa.rewiredCount += 1
-                                        refreshStatusLabel()
-                                end
+                        if not originPos or not dirPos then
+                                return
                         end
+                        if (originPos - aimPosition).Magnitude < 0.05 or (dirPos - aimPosition).Magnitude < 0.05 then
+                                return
+                        end
+                        local look0 = buildLookCFrame(originPos, aimPosition)
+                        local look1 = buildLookCFrame(dirPos, aimPosition)
+                        local enc0 = look0 and encodeCFrameSafe(look0) or nil
+                        local enc1 = look1 and encodeCFrameSafe(look1) or nil
+                        if not enc0 or not enc1 then
+                                return
+                        end
+                        rawset(inner, utf8.char(0), enc0)
+                        rawset(inner, utf8.char(1), enc1)
+                        pcall(function()
+                                rawset(inner, utf8.char(2), aimPart)
+                        end)
+                        pcall(function()
+                                rawset(inner, utf8.char(3), sa.utility:EncodeCFrame(aimPart.CFrame:ToObjectSpace(CFrame.new(aimPosition))))
+                        end)
+                        sa.rewiredCount += 1
+                        if sa.rewiredCount == 1 then
+                                notify("silent aim - first shot redirected", 4)
+                        end
+                        refreshStatusLabel()
                 end)
-                return suppress
         end
 
-        local function collectFireServerTargets(useItem)
-                local found = {}
-                local seen = {}
+        local function handleUseItemFire(_, objectId, actionType, actionArgs, ...)
+                sa.seenCount += 1
                 pcall(function()
-                        local own = useItem.FireServer
-                        if type(own) == "function" then
-                                seen[own] = true
-                                table.insert(found, own)
+                        processOutgoingUseItem(objectId, actionType, actionArgs)
+                end)
+                local useItem = sa.useItem or getUseItemRemote()
+                if not useItem then
+                        return nil
+                end
+                local extras = table.pack(...)
+                local out = table.create(4 + extras.n)
+                out[1] = useItem
+                out[2] = objectId
+                out[3] = actionType
+                out[4] = actionArgs
+                if extras.n > 0 then
+                        table.move(extras, 1, extras.n, 5, out)
+                end
+                return h2oRawFireServer(table.unpack(out, 1, 4 + extras.n))
+        end
+
+        local function resolveClientItemInput()
+                local holder = nil
+                pcall(function()
+                        holder = LocalPlayer:FindFirstChildOfClass("PlayerScripts")
+                end)
+                if not holder then
+                        return nil
+                end
+                local node = holder:FindFirstChild("Modules")
+                node = node and node:FindFirstChild("ClientReplicatedClasses")
+                node = node and node:FindFirstChild("ClientFighter")
+                node = node and node:FindFirstChild("ClientItem")
+                if not node then
+                        return nil
+                end
+                local ok, mod = pcall(require, node)
+                if ok and type(mod) == "table" and type(mod.Input) == "function" then
+                        return mod.Input
+                end
+                if ok and type(mod) == "function" then
+                        return mod
+                end
+                local child = node:FindFirstChild("Input")
+                if child then
+                        local ok2, mod2 = pcall(require, child)
+                        if ok2 and type(mod2) == "function" then
+                                return mod2
+                        end
+                end
+                return nil
+        end
+
+        local function buildFakeStorage(original)
+                local function realChild(instance, key)
+                        if not instance then
+                                return nil
+                        end
+                        local ok, v = pcall(function()
+                                return instance[key]
+                        end)
+                        if ok then
+                                return v
+                        end
+                        return nil
+                end
+                local realRemotes = nil
+                local realReplication = nil
+                local realFighter = nil
+                pcall(function()
+                        local node = original
+                        if node.Name == "Remotes" then
+                                realRemotes = node
+                        elseif node.Name == "Replication" then
+                                realRemotes = node.Parent
+                        elseif node.Name == "Fighter" then
+                                realRemotes = node.Parent and node.Parent.Parent or nil
+                        else
+                                realRemotes = node:FindFirstChild("Remotes")
+                        end
+                        if realRemotes then
+                                realReplication = realRemotes:FindFirstChild("Replication")
+                        end
+                        if realReplication then
+                                realFighter = realReplication:FindFirstChild("Fighter")
                         end
                 end)
-                if type(getgc) == "function" and type(getinfo) == "function" then
-                        local ok, heap = pcall(getgc, true)
-                        if ok and type(heap) == "table" then
-                                local scanned = 0
-                                for _, v in ipairs(heap) do
-                                        scanned += 1
-                                        if scanned > 15000 or #found >= 6 then
-                                                break
-                                        end
-                                        if type(v) == "function" and not seen[v] then
-                                                local hit = false
-                                                pcall(function()
-                                                        local info = getinfo(v)
-                                                        if info and (info.what == "C" or info.source == "=[C]") and info.name == "FireServer" then
-                                                                hit = true
+                local fakeUseItem = { FireServer = handleUseItemFire }
+                local fakeFighter = setmetatable({ UseItem = fakeUseItem }, {
+                        __index = function(_, key)
+                                return realChild(realFighter, key)
+                        end,
+                })
+                local fakeReplication = setmetatable({ Fighter = fakeFighter }, {
+                        __index = function(_, key)
+                                return realChild(realReplication, key)
+                        end,
+                })
+                local fakeRemotes = setmetatable({ Replication = fakeReplication }, {
+                        __index = function(_, key)
+                                return realChild(realRemotes, key)
+                        end,
+                })
+                return setmetatable({
+                        Remotes = fakeRemotes,
+                        Replication = fakeReplication,
+                        Fighter = fakeFighter,
+                        UseItem = fakeUseItem,
+                }, {
+                        __index = function(_, key)
+                                return realChild(original, key)
+                        end,
+                })
+        end
+
+        installInputHook = function()
+                if sa.inputHooked then
+                        return true
+                end
+                local input = resolveClientItemInput()
+                if not input then
+                        return false
+                end
+                local getUps = nil
+                if type(getupvalues) == "function" then
+                        getUps = getupvalues
+                elseif type(debug) == "table" and type(debug.getupvalues) == "function" then
+                        getUps = debug.getupvalues
+                end
+                if not getUps then
+                        return false
+                end
+                local ok = pcall(function()
+                        local ups = getUps(input)
+                        if type(ups) ~= "table" then
+                                return
+                        end
+                        local storage = game:GetService("ReplicatedStorage")
+                        local best = nil
+                        local bestDepth = 99
+                        for _, up in ipairs(ups) do
+                                if type(up) == "table" then
+                                        for k, v in pairs(up) do
+                                                if typeof(v) == "Instance" then
+                                                        local depth = 0
+                                                        if v ~= storage then
+                                                                pcall(function()
+                                                                        local cur = v
+                                                                        while cur and cur ~= storage and depth < 8 do
+                                                                                cur = cur.Parent
+                                                                                depth += 1
+                                                                        end
+                                                                        if cur ~= storage then
+                                                                                depth = 99
+                                                                        end
+                                                                end)
                                                         end
-                                                end)
-                                                if hit then
-                                                        seen[v] = true
-                                                        table.insert(found, v)
+                                                        if depth < bestDepth then
+                                                                best = { Tbl = up, Index = k, Original = v }
+                                                                bestDepth = depth
+                                                        end
                                                 end
                                         end
                                 end
                         end
-                end
-                return found
+                        if not best then
+                                return
+                        end
+                        best.Tbl[best.Index] = buildFakeStorage(best.Original)
+                        sa.inputRestore = best
+                        sa.inputHooked = true
+                end)
+                return ok and sa.inputHooked or false
         end
 
-        local function installFireHook(oldTarget, useItem)
-                local real = oldTarget
-                local handler
-                handler = function(self, ...)
-                        if self == useItem and sa.enabled and not h2o.Unloaded then
-                                sa.seenCount += 1
-                                local packed = table.pack(...)
-                                local suppress = false
-                                pcall(function()
-                                        suppress = redirectShot(packed)
-                                end)
-                                if suppress then
-                                        return nil
-                                end
-                                return real(self, table.unpack(packed, 1, packed.n))
-                        end
-                        return real(self, ...)
+        local function installNamecallHook()
+                if sa.namecallHooked then
+                        return true
                 end
-                local wrapped = handler
-                pcall(function()
-                        if type(newcclosure) == "function" then
-                                local w = newcclosure(handler)
-                                if type(w) == "function" then
-                                        wrapped = w
+                if type(hookmetamethod) ~= "function" or type(getnamecallmethod) ~= "function" then
+                        return false
+                end
+                local ok = pcall(function()
+                        local old
+                        local handler = function(self, ...)
+                                if self == sa.useItem and getnamecallmethod() == "FireServer" then
+                                        sa.seenCount += 1
+                                        local packed = table.pack(...)
+                                        pcall(function()
+                                                processOutgoingUseItem(packed[1], packed[2], packed[3])
+                                        end)
+                                        return old(self, table.unpack(packed, 1, packed.n))
                                 end
+                                return old(self, ...)
                         end
+                        local wrapped = handler
+                        pcall(function()
+                                if type(newcclosure) == "function" then
+                                        local w = newcclosure(handler)
+                                        if type(w) == "function" then
+                                                wrapped = w
+                                        end
+                                end
+                        end)
+                        old = hookmetamethod(game, "__namecall", wrapped)
+                        sa.originalNamecall = old
                 end)
-                local ok, ret = pcall(hookfunction, oldTarget, wrapped)
-                if not ok or type(ret) ~= "function" or rawequal(ret, oldTarget) then
-                        return nil
-                end
-                real = ret
-                return {
-                        old = oldTarget,
-                        hook = wrapped,
-                        real = real,
-                }
+                sa.namecallHooked = ok and sa.originalNamecall ~= nil or false
+                return sa.namecallHooked
         end
 
         local function stop()
@@ -11663,6 +11863,22 @@ do
                         end)
                         sa.charConnection = nil
                 end
+                if sa.inputRestore then
+                        pcall(function()
+                                sa.inputRestore.Tbl[sa.inputRestore.Index] = sa.inputRestore.Original
+                        end)
+                        sa.inputRestore = nil
+                end
+                sa.inputHooked = false
+                if sa.namecallHooked and sa.originalNamecall and type(hookmetamethod) == "function" then
+                        pcall(function()
+                                hookmetamethod(game, "__namecall", sa.originalNamecall)
+                        end)
+                end
+                sa.originalNamecall = nil
+                sa.namecallHooked = false
+                sa.hookMode = nil
+                sa.useItem = nil
                 sa.enabled = false
                 sa.lockedTarget = nil
                 sa.lockedPart = nil
@@ -11677,85 +11893,32 @@ do
                         return
                 end
                 if not getStartShootingEnum() then
-                        notify("silent aim - action enum unavailable", 6)
-                        return
+                        notify("silent aim - action enum unavailable, matching raw byte instead", 6)
                 end
                 local useItem = getUseItemRemote()
                 if not useItem then
                         notify("silent aim - UseItem remote not found", 6)
                         return
                 end
-                if not sa.hookInstalled then
-                        local hasNamecall = type(hookmetamethod) == "function" and type(getnamecallmethod) == "function"
-                        local hasHookFn = type(hookfunction) == "function"
-                        if not hasNamecall and not hasHookFn then
-                                notify("silent aim - hooks unavailable, auto shoot mode still works", 6)
-                        end
-                        if not sa.hookInstalled and hasHookFn then
-                                pcall(function()
-                                        local targets = collectFireServerTargets(useItem)
-                                        for _, candidate in ipairs(targets) do
-                                                local pair = installFireHook(candidate, useItem)
-                                                if pair then
-                                                        table.insert(sa.hookTargets, pair)
-                                                end
-                                        end
-                                end)
-                                if #sa.hookTargets > 0 then
-                                        sa.hookMode = "fire"
-                                        sa.hookInstalled = true
+                sa.useItem = useItem
+                if not sa.utility then
+                        pcall(function()
+                                local utilNode = remote("Modules", "Utility")
+                                local util = utilNode and require(utilNode) or nil
+                                if type(util) == "table" then
+                                        sa.utility = util
                                 end
-                        end
-                        if not sa.hookInstalled and hasNamecall then
-                                local hookOk = pcall(function()
-                                        local oldNamecall
-                                        local handler = function(self, ...)
-                                                if sa.enabled and self == useItem and getnamecallmethod() == "FireServer" then
-                                                        local packed = table.pack(...)
-                                                        local suppress = false
-                                                        pcall(function()
-                                                                suppress = redirectShot(packed)
-                                                        end)
-                                                        if suppress then
-                                                                return nil
-                                                        end
-                                                        return oldNamecall(self, table.unpack(packed, 1, packed.n))
-                                                end
-                                                return oldNamecall(self, ...)
-                                        end
-                                        local wrapped = handler
-                                        pcall(function()
-                                                if type(newcclosure) == "function" then
-                                                        wrapped = newcclosure(handler)
-                                                end
-                                        end)
-                                        oldNamecall = hookmetamethod(game, "__namecall", wrapped)
-                                        sa.originalNamecall = oldNamecall
-                                end)
-                                if hookOk and sa.originalNamecall then
-                                        sa.hookMode = "namecall"
-                                        sa.hookInstalled = true
-                                else
-                                        notify("silent aim - namecall hook failed", 6)
-                                end
-                        end
-                        if sa.hookInstalled then
-                                if sa.hookMode == "fire" then
-                                        notify("silent aim ready - net hook active (" .. #sa.hookTargets .. " paths)", 4)
-                                else
-                                        notify("silent aim ready - namecall hook active", 4)
-                                end
-                        else
-                                notify("silent aim - hook install failed, auto shoot only", 6)
-                        end
+                        end)
                 end
-                pcall(function()
-                        local utilNode = remote("Modules", "Utility")
-                        local util = utilNode and require(utilNode) or nil
-                        if type(util) == "table" then
-                                sa.utility = util
-                        end
-                end)
+                if installInputHook() then
+                        sa.hookMode = "input"
+                        notify("silent aim ready - input hook active", 4)
+                elseif installNamecallHook() then
+                        sa.hookMode = "namecall"
+                        notify("silent aim ready - namecall hook active", 4)
+                else
+                        notify("silent aim - net hook unavailable, auto shoot only", 6)
+                end
                 sa.enabled = true
                 ensureVisuals()
                 sa.visualConnection = RunService.RenderStepped:Connect(onVisualStep)
@@ -11906,22 +12069,15 @@ do
                         end)
                 end
                 table.clear(sa.deflecting)
-                if sa.hookTargets and type(hookfunction) == "function" then
-                        for _, pair in ipairs(sa.hookTargets) do
-                                pcall(function()
-                                        hookfunction(pair.hook, pair.real or pair.old)
-                                end)
-                        end
-                end
-                if sa.hookMode == "namecall" and sa.originalNamecall and type(hookmetamethod) == "function" then
+                if sa.inputRestore then
                         pcall(function()
-                                hookmetamethod(game, "__namecall", sa.originalNamecall)
+                                sa.inputRestore.Tbl[sa.inputRestore.Index] = sa.inputRestore.Original
                         end)
+                        sa.inputRestore = nil
                 end
-                table.clear(sa.hookTargets)
+                sa.inputHooked = false
+                sa.namecallHooked = false
                 sa.hookMode = nil
-                sa.hookTargets = {}
-                sa.hookInstalled = false
         end)
 end
 
@@ -11954,3 +12110,4 @@ if not h2o.StartupState.silent then
                 Time = 4,
         })
 end
+                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                             
