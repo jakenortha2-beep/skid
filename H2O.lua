@@ -13,8 +13,9 @@ local TextChatService = game:GetService("TextChatService")
 
 local h2o = {
         Name = "h2o",
-        Version = "1.2.0",
+        Version = "1.2.1",
         Author = "h2o",
+        DefaultSourceUrl = "https://raw.githubusercontent.com/jakenortha2-beep/skid/main/H2O.lua",
         Toggles = {},
         Options = {},
         Modules = {},
@@ -97,12 +98,9 @@ do
                         startupState.path = decoded.path
                 end
         end)
-        pcall(function()
-                local forced = getgenv and getgenv().H2O_SOURCE_URL
-                if type(forced) == "string" and #forced > 8 then
-                        startupState.url = forced
-                end
-        end)
+        if startupState.url == "" and type(h2o.DefaultSourceUrl) == "string" and #h2o.DefaultSourceUrl > 8 then
+                startupState.url = h2o.DefaultSourceUrl
+        end
         h2o.SourceCached = false
         local sourceSignature = "h2o/main/source.lua"
         local function captureSource()
@@ -173,15 +171,58 @@ do
                 end
                 if type(url) == "string" and #url > 8 then
                         local safe = url:gsub("['%\\]", "")
-                        parts[#parts + 1] = ("pcall(function() if not src then src=(game:HttpGet('%s')) end end"):format(safe)
+                        parts[#parts + 1] = ("pcall(function() if not src then local b=(game:HttpGet('%s')) if b and #b>50 and not b:lower():find('<!doctype',1,true) and not b:lower():find('<html',1,true) then src=(b) end end end"):format(safe)
                 end
                 parts[#parts + 1] = ("if not src and type(readfile)=='function' then pcall(function() local c=readfile('%s') if type(c)=='string' and #c>50 then src=c end end) end"):format(sourceSignature)
                 parts[#parts + 1] = "if src and #src>50 then local f=loadstring(src) if f then f() end end"
                 return "pcall(function() local src=nil " .. table.concat(parts, " ") .. " end)"
         end
+        local function normalizeSourceUrl(text)
+                text = tostring(text or ""):gsub("^%s+", ""):gsub("%s+$", "")
+                local offset
+                local lower = text:lower()
+                if lower:sub(1, 8) == "https://" then
+                        offset = 9
+                elseif lower:sub(1, 7) == "http://" then
+                        offset = 8
+                else
+                        return ""
+                end
+                local rest = text:sub(offset)
+                local host, path = rest:match("^([^/]+)/?(.*)$")
+                host = host and host:lower() or ""
+                if host == "github.com" then
+                        local prefix, tail = path:match("^(.-)/blob/(.+)$")
+                        if not prefix then
+                                prefix, tail = path:match("^(.-)/raw/(.+)$")
+                        end
+                        if prefix and tail then
+                                tail = tail:match("^([^%?#]+)") or tail
+                                tail = tail:gsub("/+$", "")
+                                return ("https://raw.githubusercontent.com/%s/%s"):format(prefix, tail)
+                        end
+                elseif host == "gist.github.com" then
+                        local guser, gid = path:match("^([%w%.%-%_]+)/([%w%-]+)")
+                        if guser and gid then
+                                return ("https://gist.githubusercontent.com/%s/%s/raw"):format(guser, gid)
+                        end
+                elseif host == "pastebin.com" then
+                        local pasteId = path:match("^([^/]+)$")
+                        if pasteId and pasteId:lower() ~= "raw" then
+                                return ("https://pastebin.com/raw/%s"):format(pasteId)
+                        end
+                end
+                return text
+        end
         local function isLikelyH2oSource(body)
-                return type(body) == "string" and #body > 100
-                        and (body:find(sourceSignature, 1, true) ~= nil or body:find("loadstring", 1, true) ~= nil)
+                if type(body) ~= "string" or #body < 100 then
+                        return false
+                end
+                local head = body:sub(1, 300):lower()
+                if head:find("<!doctype", 1, true) or head:find("<html", 1, true) then
+                        return false
+                end
+                return body:find(sourceSignature, 1, true) ~= nil or body:find("loadstring", 1, true) ~= nil
         end
         local function setRerunSource(text)
                 text = tostring(text or ""):gsub("^%s+", ""):gsub("%s+$", "")
@@ -191,19 +232,24 @@ do
                         startupState.url = ""
                         status = "rerun source cleared"
                 elseif text:sub(1, 4):lower() == "http" then
-                        local ok, body = pcall(function()
-                                return game:HttpGet(text)
-                        end)
-                        if ok and isLikelyH2oSource(body) then
-                                startupState.url = text
-                                startupState.path = ""
-                                if writeFileFn then
-                                        pcall(writeFileFn, sourceSignature, body)
-                                        h2o.SourceCached = true
-                                end
-                                status = "rerun source set - url (" .. #body .. " chars)"
+                        local normalized = normalizeSourceUrl(text)
+                        if normalized == "" then
+                                status = "invalid url"
                         else
-                                status = "url fetch failed or does not look like h2o"
+                                local ok, body = pcall(function()
+                                        return game:HttpGet(normalized)
+                                end)
+                                if ok and isLikelyH2oSource(body) then
+                                        startupState.url = normalized
+                                        startupState.path = ""
+                                        if writeFileFn then
+                                                pcall(writeFileFn, sourceSignature, body)
+                                                h2o.SourceCached = true
+                                        end
+                                        status = "rerun source set - url ok (" .. #body .. " chars)"
+                                else
+                                        status = "url fetch failed or does not look like h2o"
+                                end
                         end
                 elseif readFileFn and (not isFileFn or isFileFn(text)) then
                         local ok, body = pcall(readFileFn, text)
@@ -225,6 +271,17 @@ do
                 return status
         end
         h2o.SetRerunSource = setRerunSource
+        pcall(function()
+                local forced = getgenv and getgenv().H2O_SOURCE_URL
+                if type(forced) == "string" and #forced > 8 then
+                        local clean = normalizeSourceUrl(forced)
+                        if clean ~= "" then
+                                startupState.url = clean
+                                startupState.path = ""
+                                saveStartupState()
+                        end
+                end
+        end)
         pcall(function()
                 if typeof(LocalPlayer) ~= "Instance" then
                         return
@@ -8624,7 +8681,8 @@ do
                 if h2o.StartupState.path ~= "" then
                         return "rerun source: file path"
                 elseif h2o.StartupState.url ~= "" then
-                        return "rerun source: url"
+                        local host = h2o.StartupState.url:match("^https?://([^/]+)")
+                        return "rerun source: url (" .. (host and host:lower() or "url") .. ")"
                 elseif h2o.SourceCached then
                         return "rerun source: cached script"
                 end
@@ -8646,13 +8704,17 @@ do
         local SourceInput = StartupGroup:AddInput("startup_source", {
                 Default = h2o.StartupState.path ~= "" and h2o.StartupState.path or h2o.StartupState.url,
                 Text = "rerun source",
-                Placeholder = "script url or local file path",
-                Tooltip = "where h2o is re-loaded from after a teleport - click test to confirm it",
+                Placeholder = "paste raw script url or local file path",
+                Tooltip = "where h2o is re-loaded from after a teleport - github/gist/pastebin links are converted to raw automatically - click test to save it",
         })
         StartupGroup:AddButton({
                 Text = "test rerun source",
                 Func = function()
                         local status = h2o.SetRerunSource(SourceInput.Value)
+                        local display = h2o.StartupState.path ~= "" and h2o.StartupState.path or h2o.StartupState.url
+                        if display ~= "" and SourceInput.Value ~= display then
+                                SourceInput:SetValue(display)
+                        end
                         SourceLabel:SetText(sourceStatus())
                         notify(status, 5)
                 end,
