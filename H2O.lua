@@ -13,7 +13,7 @@ local TextChatService = game:GetService("TextChatService")
 
 local h2o = {
         Name = "h2o",
-        Version = "1.4.1",
+        Version = "1.4.2",
         Author = "h2o",
         Toggles = {},
         Options = {},
@@ -9606,6 +9606,521 @@ do
                 table.clear(wstate.infoCache)
                 table.clear(wstate.projectileCache)
         end)
+end
+
+do
+        local AimGroup = h2o.Tabs.combat:AddLeftGroupbox("aim assist", "target")
+
+        local aim = {
+                connection = nil,
+                inputBegan = nil,
+                inputEnded = nil,
+                gui = nil,
+                outlineFrame = nil,
+                outlineStroke = nil,
+                fillFrame = nil,
+                fillGradient = nil,
+                circle = nil,
+                fillPos = nil,
+                lastTargetPosition = nil,
+                rightClicked = false,
+                mouseSensitivity = 1,
+        }
+
+        local moveConst = Vector2.new(1, 0.77) * math.rad(0.5)
+
+        local function removeVisuals()
+                if aim.circle then
+                        pcall(function()
+                                aim.circle.Visible = false
+                                aim.circle:Remove()
+                        end)
+                        aim.circle = nil
+                end
+                if aim.gui then
+                        pcall(function()
+                                aim.gui:Destroy()
+                        end)
+                        aim.gui = nil
+                        aim.outlineFrame = nil
+                        aim.outlineStroke = nil
+                        aim.fillFrame = nil
+                        aim.fillGradient = nil
+                end
+        end
+
+        local function ensureVisuals()
+                if not aim.gui then
+                        pcall(function()
+                                local gui = Instance.new("ScreenGui")
+                                gui.Name = "h2o_aimassist_fov"
+                                gui.IgnoreGuiInset = true
+                                gui.ResetOnSpawn = false
+                                gui.DisplayOrder = 1000000
+                                gui.ZIndexBehavior = Enum.ZIndexBehavior.Global
+                                gui.Parent = LocalPlayer:WaitForChild("PlayerGui")
+
+                                local fill = Instance.new("Frame")
+                                fill.AnchorPoint = Vector2.new(0.5, 0.5)
+                                fill.BackgroundColor3 = Color3.new(1, 1, 1)
+                                fill.BackgroundTransparency = 0.55
+                                fill.BorderSizePixel = 0
+                                fill.Visible = false
+                                fill.ZIndex = 1
+                                fill.Parent = gui
+
+                                local fillCorner = Instance.new("UICorner")
+                                fillCorner.CornerRadius = UDim.new(1, 0)
+                                fillCorner.Parent = fill
+
+                                local gradient = Instance.new("UIGradient")
+                                gradient.Rotation = 0
+                                gradient.Parent = fill
+
+                                local outline = Instance.new("Frame")
+                                outline.AnchorPoint = Vector2.new(0.5, 0.5)
+                                outline.BackgroundTransparency = 1
+                                outline.BorderSizePixel = 0
+                                outline.Visible = false
+                                outline.ZIndex = 2
+                                outline.Parent = gui
+
+                                local outlineCorner = Instance.new("UICorner")
+                                outlineCorner.CornerRadius = UDim.new(1, 0)
+                                outlineCorner.Parent = outline
+
+                                local stroke = Instance.new("UIStroke")
+                                stroke.Color = Color3.new(1, 1, 1)
+                                stroke.Thickness = 1
+                                stroke.ApplyStrokeMode = Enum.ApplyStrokeMode.Border
+                                stroke.Parent = outline
+
+                                aim.gui = gui
+                                aim.fillFrame = fill
+                                aim.fillGradient = gradient
+                                aim.outlineFrame = outline
+                                aim.outlineStroke = stroke
+                        end)
+                end
+                if not aim.circle and Drawing then
+                        pcall(function()
+                                local circle = Drawing.new("Circle")
+                                circle.Filled = false
+                                circle.Color = Color3.new(1, 1, 1)
+                                circle.Radius = 100
+                                circle.Thickness = 2
+                                circle.Visible = false
+                                aim.circle = circle
+                        end)
+                end
+        end
+
+        local function getMuzzleScreenPosition(camera)
+                local muzzle = nil
+                pcall(function()
+                        local fighter = getLocalFighter()
+                        local item = fighter and fighter.EquippedItem
+                        if item and item.ViewModel and item.ViewModel.GetMuzzlePosition then
+                                muzzle = item.ViewModel:GetMuzzlePosition()
+                        end
+                end)
+                if not muzzle then
+                        pcall(function()
+                                local viewModels = workspace:FindFirstChild("ViewModels")
+                                if viewModels then
+                                        for _, model in viewModels:GetChildren() do
+                                                if model:IsA("Model") and model.Name:find(LocalPlayer.Name, 1, true) then
+                                                        local part = model:FindFirstChild("Muzzle", true)
+                                                                or model:FindFirstChild("Barrel", true)
+                                                                or model:FindFirstChild("Handle", true)
+                                                        if part and part:IsA("BasePart") then
+                                                                muzzle = part.Position
+                                                                break
+                                                        elseif part and part:IsA("Attachment") then
+                                                                muzzle = part.WorldPosition
+                                                                break
+                                                        end
+                                                end
+                                        end
+                                end
+                        end)
+                end
+                if muzzle and camera then
+                        local pos, visible = camera:WorldToViewportPoint(muzzle)
+                        if visible then
+                                return Vector2.new(pos.X, pos.Y)
+                        end
+                end
+                return nil
+        end
+
+        local function getFOVOrigin(part)
+                local camera = workspace.CurrentCamera
+                local mode = Options.aimassist_fov_pos and Options.aimassist_fov_pos.Value or ""
+                local origin = nil
+                if mode == "position on target" and part and part.Position then
+                        local pos, visible = camera:WorldToViewportPoint(part.Position)
+                        if visible then
+                                origin = Vector2.new(pos.X, pos.Y)
+                        end
+                end
+                if not origin and mode == "position on barrel" and camera then
+                        origin = getMuzzleScreenPosition(camera)
+                end
+                if not origin and camera then
+                        local viewport = camera.ViewportSize
+                        origin = Vector2.new(viewport.X / 2, viewport.Y / 2)
+                end
+                origin = origin or UserInputService:GetMouseLocation()
+                return origin
+        end
+
+        local function getAimParts(char)
+                local parts = {}
+                if not char then
+                        return parts
+                end
+                for _, name in ipairs({
+                        "Head",
+                        "UpperTorso",
+                        "Torso",
+                        "HumanoidRootPart",
+                        "LowerTorso",
+                        "LeftUpperArm",
+                        "RightUpperArm",
+                        "LeftUpperLeg",
+                        "RightUpperLeg",
+                }) do
+                        local part = char:FindFirstChild(name)
+                        if part and part:IsA("BasePart") then
+                                table.insert(parts, part)
+                        end
+                end
+                return parts
+        end
+
+        local function getMouseSensitivity()
+                local ok, value = pcall(function()
+                        return UserSettings():GetService("UserGameSettings").MouseSensitivity
+                end)
+                if ok and type(value) == "number" and value > 0 then
+                        aim.mouseSensitivity = value
+                end
+                return aim.mouseSensitivity
+        end
+
+        local function wrapAngle(num)
+                num = num % math.pi
+                num -= num >= (math.pi / 2) and math.pi or 0
+                num += num < -(math.pi / 2) and math.pi or 0
+                return num
+        end
+
+        local function tweenFovPos(target, dt)
+                if not aim.fillPos then
+                        aim.fillPos = target
+                        return target
+                end
+                local progress = math.clamp((dt or 0) / 0.18, 0, 1)
+                local alpha = TweenService:GetValue(progress, Enum.EasingStyle.Quad, Enum.EasingDirection.Out)
+                aim.fillPos = aim.fillPos:Lerp(target, alpha)
+                if (aim.fillPos - target).Magnitude < 0.1 then
+                        aim.fillPos = target
+                end
+                return aim.fillPos
+        end
+
+        local function getClosestTarget()
+                local camera = workspace.CurrentCamera
+                if not camera then
+                        return nil
+                end
+                local closest = nil
+                local closestDist = Options.aimassist_fov and Options.aimassist_fov.Value or 100
+                local origin = getFOVOrigin(nil)
+                for _, plr in ipairs(Players:GetPlayers()) do
+                        if plr ~= LocalPlayer then
+                                local char = plr.Character
+                                local humanoid = char and char:FindFirstChildOfClass("Humanoid")
+                                if char and humanoid and humanoid.Health > 0 then
+                                        local part = char:FindFirstChild("Head") or char:FindFirstChild("HumanoidRootPart")
+                                        local bestPartDist = math.huge
+                                        if Toggles.aimassist_closest_part.Value then
+                                                for _, aimPart in ipairs(getAimParts(char)) do
+                                                        local screenPos, screenVisible = camera:WorldToViewportPoint(aimPart.Position)
+                                                        if screenVisible then
+                                                                local screenDist = (Vector2.new(screenPos.X, screenPos.Y) - origin).Magnitude
+                                                                if screenDist < bestPartDist then
+                                                                        bestPartDist = screenDist
+                                                                        part = aimPart
+                                                                end
+                                                        end
+                                                end
+                                        end
+                                        if part then
+                                                local pos, visible = camera:WorldToViewportPoint(part.Position)
+                                                if visible then
+                                                        local mouse = getFOVOrigin(part)
+                                                        local dist = (Vector2.new(pos.X, pos.Y) - mouse).Magnitude
+                                                        if Toggles.aimassist_closest_pos.Value then
+                                                                local root = LocalPlayer.Character and LocalPlayer.Character:FindFirstChild("HumanoidRootPart")
+                                                                local targetRoot = char:FindFirstChild("HumanoidRootPart")
+                                                                if root and targetRoot then
+                                                                        dist = (targetRoot.Position - root.Position).Magnitude
+                                                                end
+                                                        end
+                                                        if dist < closestDist then
+                                                                closestDist = dist
+                                                                closest = { Player = plr, Character = char, Part = part }
+                                                        end
+                                                end
+                                        end
+                                end
+                        end
+                end
+                return closest
+        end
+
+        local function onStep(dt)
+                if h2o.Unloaded then
+                        return
+                end
+                pcall(function()
+                        local camera = workspace.CurrentCamera
+                        if not camera then
+                                return
+                        end
+                        local showFov = Toggles.aimassist_show_fov.Value == true
+                        local radius = Options.aimassist_fov.Value or 100
+                        local mode = Options.aimassist_fov_pos.Value or ""
+                        local fovTarget = nil
+                        if mode == "position on target" and aim.lastTargetPosition then
+                                fovTarget = { Position = aim.lastTargetPosition }
+                        end
+                        local fovPos = tweenFovPos(getFOVOrigin(fovTarget), dt)
+                        local outlineOn = Toggles.aimassist_outline.Value == true
+                        local outlineColor = Options.aimassist_outline_color.Value or Color3.new(1, 1, 1)
+                        if aim.circle then
+                                aim.circle.Position = fovPos
+                                aim.circle.Visible = showFov
+                                aim.circle.Radius = radius
+                                aim.circle.Color = outlineColor
+                                aim.circle.Thickness = outlineOn and 2 or 1
+                        elseif aim.outlineFrame then
+                                aim.outlineFrame.Position = UDim2.fromOffset(fovPos.X, fovPos.Y)
+                                aim.outlineFrame.Size = UDim2.fromOffset(radius * 2, radius * 2)
+                                aim.outlineFrame.Visible = showFov
+                                aim.outlineStroke.Color = outlineColor
+                                aim.outlineStroke.Thickness = outlineOn and 2 or 1
+                        end
+                        if aim.fillFrame and aim.fillGradient then
+                                local fillOn = showFov and Toggles.aimassist_fill.Value == true
+                                aim.fillFrame.Visible = fillOn
+                                if fillOn then
+                                        aim.fillFrame.Position = UDim2.fromOffset(fovPos.X, fovPos.Y)
+                                        aim.fillFrame.Size = UDim2.fromOffset(radius * 2, radius * 2)
+                                        local fillColor = Options.aimassist_fill_color.Value or Color3.new(1, 1, 1)
+                                        aim.fillGradient.Color = ColorSequence.new({
+                                                ColorSequenceKeypoint.new(0, fillColor),
+                                                ColorSequenceKeypoint.new(1, fillColor:Lerp(Color3.new(1, 1, 1), 0.65)),
+                                        })
+                                        local rotation = Options.aimassist_rotation.Value or 0
+                                        if Toggles.aimassist_spin.Value then
+                                                rotation += os.clock() * 360 * (Options.aimassist_rot_speed.Value or 1)
+                                        end
+                                        aim.fillGradient.Rotation = rotation % 360
+                                end
+                        end
+                        if h2o.Unloaded or Library.Toggled then
+                                aim.lastTargetPosition = nil
+                                return
+                        end
+                        if Toggles.aimassist_right_click.Value and not aim.rightClicked then
+                                aim.lastTargetPosition = nil
+                                return
+                        end
+                        local ent = getClosestTarget()
+                        if not ent then
+                                aim.lastTargetPosition = nil
+                                return
+                        end
+                        local targetPosition = ent.Part.Position
+                        if Toggles.aimassist_delay_pos.Value then
+                                local velocity = ent.Part.AssemblyLinearVelocity
+                                targetPosition += velocity * math.clamp((Options.aimassist_speed.Value or 100) / 1000, 0, 0.2)
+                        end
+                        local jumpSmooth = Options.aimassist_jump_smooth.Value or 0
+                        if jumpSmooth > 0 then
+                                local velocity = ent.Part.AssemblyLinearVelocity
+                                targetPosition += Vector3.new(0, velocity.Y * (jumpSmooth / 100) * dt, 0)
+                        end
+                        aim.lastTargetPosition = targetPosition
+                        local facing = camera.CFrame.LookVector
+                        local new = (targetPosition - camera.CFrame.Position).Unit
+                        if new == Vector3.zero then
+                                return
+                        end
+                        local diffYaw = wrapAngle(math.atan2(facing.X, facing.Z) - math.atan2(new.X, new.Z))
+                        local diffPitch = math.asin(facing.Y) - math.asin(new.Y)
+                        local angle = Vector2.new(diffYaw, diffPitch) / (moveConst * getMouseSensitivity())
+                        angle = Vector2.new(angle.X * ((Options.aimassist_x_smooth.Value or 100) / 100), angle.Y * ((Options.aimassist_y_smooth.Value or 100) / 100))
+                        angle *= math.min(((Options.aimassist_speed.Value or 100) / 100) * (Options.aimassist_lerp.Value or 1) * dt * 10, 1)
+                        pcall(function()
+                                mousemoverel(angle.X, angle.Y)
+                        end)
+                end)
+        end
+
+        local function disconnectRightClick()
+                if aim.inputBegan then
+                        pcall(function()
+                                aim.inputBegan:Disconnect()
+                        end)
+                        aim.inputBegan = nil
+                end
+                if aim.inputEnded then
+                        pcall(function()
+                                aim.inputEnded:Disconnect()
+                        end)
+                        aim.inputEnded = nil
+                end
+                aim.rightClicked = false
+        end
+
+        local function connectRightClick()
+                if aim.inputBegan or not aim.connection then
+                        return
+                end
+                aim.inputBegan = UserInputService.InputBegan:Connect(function(input)
+                        if input.UserInputType == Enum.UserInputType.MouseButton2 then
+                                aim.rightClicked = true
+                        end
+                end)
+                aim.inputEnded = UserInputService.InputEnded:Connect(function(input)
+                        if input.UserInputType == Enum.UserInputType.MouseButton2 then
+                                aim.rightClicked = false
+                        end
+                end)
+        end
+
+        local function stop()
+                if aim.connection then
+                        pcall(function()
+                                aim.connection:Disconnect()
+                        end)
+                        aim.connection = nil
+                end
+                disconnectRightClick()
+                aim.lastTargetPosition = nil
+                aim.fillPos = nil
+                removeVisuals()
+        end
+
+        local function start()
+                if aim.connection then
+                        return
+                end
+                local canMove = false
+                pcall(function()
+                        canMove = type(mousemoverel) == "function"
+                end)
+                if not canMove then
+                        notify("aim assist - this executor cannot move the mouse", 6)
+                        return
+                end
+                ensureVisuals()
+                aim.connection = RunService.RenderStepped:Connect(onStep)
+                if Toggles.aimassist_right_click.Value then
+                        connectRightClick()
+                end
+        end
+
+        AimGroup:AddToggle("aimassist_enabled", {
+                Text = "enabled",
+                Default = false,
+                Tooltip = "smoothly pulls your crosshair onto the closest enemy inside the fov circle",
+        })
+        AimGroup:AddSlider("aimassist_fov", { Text = "radius", Min = 0, Max = 1000, Default = 100, Rounding = 0, Suffix = "px" })
+        AimGroup:AddDropdown("aimassist_fov_pos", {
+                Values = { "", "position on target", "position on barrel" },
+                Default = "",
+                Text = "fov anchor",
+                Tooltip = "where the fov circle sits - screen center, locked onto the last target, or your weapon muzzle",
+        })
+        AimGroup:AddToggle("aimassist_closest_part", {
+                Text = "closest part",
+                Default = false,
+                Tooltip = "aims at whichever body part is closest to your crosshair instead of always the head",
+        })
+        AimGroup:AddToggle("aimassist_closest_pos", {
+                Text = "closest position",
+                Default = false,
+                Tooltip = "picks the target by real distance from you instead of screen distance",
+        })
+        AimGroup:AddToggle("aimassist_delay_pos", {
+                Text = "delay position",
+                Default = true,
+                Tooltip = "leads your aim ahead of moving targets using their velocity",
+        })
+        AimGroup:AddSlider("aimassist_x_smooth", { Text = "x smooth", Min = 1, Max = 100, Default = 100, Rounding = 0, Suffix = "%" })
+        AimGroup:AddSlider("aimassist_y_smooth", { Text = "y smooth", Min = 1, Max = 100, Default = 100, Rounding = 0, Suffix = "%" })
+        AimGroup:AddSlider("aimassist_speed", { Text = "smoothing", Min = 1, Max = 100, Default = 100, Rounding = 0, Suffix = "%" })
+        AimGroup:AddSlider("aimassist_lerp", { Text = "lerp", Min = 1, Max = 10, Default = 1, Rounding = 1, Suffix = "x" })
+        AimGroup:AddSlider("aimassist_jump_smooth", { Text = "jump smoothing", Min = 0, Max = 100, Default = 100, Rounding = 0, Suffix = "%" })
+        AimGroup:AddToggle("aimassist_right_click", {
+                Text = "require right click",
+                Default = false,
+                Tooltip = "only aim assist while you hold the right mouse button",
+        })
+        AimGroup:AddDivider()
+        AimGroup:AddToggle("aimassist_show_fov", {
+                Text = "show fov",
+                Default = true,
+                Tooltip = "draws the fov circle on your screen",
+        })
+        AimGroup:AddToggle("aimassist_outline", {
+                Text = "outline",
+                Default = false,
+                Tooltip = "thicker circle outline",
+        })
+        AimGroup:AddToggle("aimassist_fill", {
+                Text = "fill",
+                Default = false,
+                Tooltip = "fills the fov circle with a colored gradient",
+        })
+        AimGroup:AddToggle("aimassist_spin", {
+                Text = "moving rotation",
+                Default = false,
+                Tooltip = "spins the fill gradient continuously",
+        })
+        AimGroup:AddSlider("aimassist_rotation", { Text = "rotation", Min = 0, Max = 360, Default = 0, Rounding = 0, Suffix = "°" })
+        AimGroup:AddSlider("aimassist_rot_speed", { Text = "rotation speed", Min = 1, Max = 10, Default = 1, Rounding = 1, Suffix = "rps" })
+        AimGroup:AddLabel("outline color"):AddColorPicker("aimassist_outline_color", {
+                Default = Color3.fromRGB(255, 255, 255),
+                Title = "outline color",
+        })
+        AimGroup:AddLabel("fill color"):AddColorPicker("aimassist_fill_color", {
+                Default = Color3.fromRGB(255, 255, 255),
+                Title = "fill color",
+        })
+
+        Toggles.aimassist_enabled:OnChanged(function()
+                if Toggles.aimassist_enabled.Value then
+                        start()
+                else
+                        stop()
+                end
+        end)
+
+        Toggles.aimassist_right_click:OnChanged(function()
+                if Toggles.aimassist_right_click.Value then
+                        connectRightClick()
+                else
+                        disconnectRightClick()
+                end
+        end)
+
+        maid(stop)
 end
 
 do
