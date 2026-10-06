@@ -186,16 +186,6 @@ local function remote(...)
         return node
 end
 
-local h2oRawFireServer = nil
-pcall(function()
-        if type(clonefn) == "function" then
-                h2oRawFireServer = clonefn(Instance.new("RemoteEvent").FireServer)
-        end
-end)
-if type(h2oRawFireServer) ~= "function" then
-        h2oRawFireServer = Instance.new("RemoteEvent").FireServer
-end
-
 local function maid(item)
         table.insert(h2o.Maid, item)
 end
@@ -9954,10 +9944,11 @@ do
         local sa = {
                 active = false,
                 useItem = nil,
-                hookInstalled = false,
+                interceptInstalled = false,
+                interceptFails = 0,
                 hookTriedAt = 0,
                 hookNotified = false,
-                originalFire = nil,
+                intercepts = {},
                 shotEnum = nil,
                 reloadEnum = nil,
                 enumTried = false,
@@ -10544,21 +10535,53 @@ do
                 sa.shotsRedirected += 1
         end
 
-        local function installHook()
-                if sa.hookInstalled then
-                        return true
+        local upvGet = nil
+        local upvSet = nil
+        pcall(function()
+                if type(debug) == "table" and type(debug.getupvalues) == "function" then
+                        upvGet = debug.getupvalues
                 end
-                if type(hookfunction) ~= "function" then
-                        return false
+        end)
+        if upvGet == nil and type(getupvalues) == "function" then
+                upvGet = getupvalues
+        end
+        pcall(function()
+                if type(debug) == "table" and type(debug.setupvalue) == "function" then
+                        upvSet = debug.setupvalue
                 end
-                ensureShotEnum()
-                local found = findUseItemRemote ~= nil and findUseItemRemote() or nil
-                if found == nil then
-                        return false
+        end)
+        if upvSet == nil and type(setupvalue) == "function" then
+                upvSet = setupvalue
+        end
+
+        local realFire = nil
+
+        local function resolveRealFire()
+                if realFire ~= nil then
+                        return realFire
                 end
-                sa.useItem = found
-                local proxy = function(self, objectId, action, args, ...)
-                        if type(action) == "string" and #action == 1 then
+                local makers = {}
+                if type(clonefn) == "function" then
+                        table.insert(makers, clonefn)
+                end
+                if type(clonefunction) == "function" then
+                        table.insert(makers, clonefunction)
+                end
+                for _, make in ipairs(makers) do
+                        local ok, cloned = pcall(function()
+                                return make(Instance.new("RemoteEvent").FireServer)
+                        end)
+                        if ok and type(cloned) == "function" then
+                                realFire = cloned
+                                return realFire
+                        end
+                end
+                return nil
+        end
+
+        local function makeShotGate(realRemote)
+                return function(self, objectId, action, args, ...)
+                        if realRemote == sa.useItem and type(action) == "string" and #action == 1 then
                                 if sa.reloadEnum ~= nil and action == sa.reloadEnum then
                                         sa.reloading = true
                                         sa.reloadingUntil = os.clock() + 3.5
@@ -10568,26 +10591,176 @@ do
                                         pcall(handleShot, self, objectId, action, args)
                                 end
                         end
-                        return h2oRawFireServer(self, objectId, action, args, ...)
+                        return realFire(realRemote, objectId, action, args, ...)
                 end
-                local wrapped = proxy
-                if type(newcclosure) == "function" then
+        end
+
+        local function makeFakeTree(realInst)
+                local node = {}
+                setmetatable(node, {
+                        __index = function(t, key)
+                                local value = nil
+                                pcall(function()
+                                        if key == "FireServer" and realInst:IsA("RemoteEvent") then
+                                                value = makeShotGate(realInst)
+                                        elseif type(key) == "string" then
+                                                local child = realInst:FindFirstChild(key)
+                                                if child ~= nil then
+                                                        value = makeFakeTree(child)
+                                                end
+                                        end
+                                end)
+                                rawset(t, key, value)
+                                return value
+                        end,
+                })
+                return node
+        end
+
+        local function functionHasConstant(fn, needle)
+                local ok, result = pcall(function()
+                        return getconstants(fn)
+                end)
+                if not ok or type(result) ~= "table" then
+                        return true
+                end
+                for _, value in ipairs(result) do
+                        if value == needle then
+                                return true
+                        end
+                end
+                return false
+        end
+
+        local function buildSites(realRemote)
+                local sites = {}
+                if upvGet == nil then
+                        return sites
+                end
+                local ok, pool = pcall(function()
+                        return getgc(true)
+                end)
+                if not ok or type(pool) ~= "table" then
+                        return sites
+                end
+                for _, value in ipairs(pool) do
+                        if type(value) == "function" then
+                                local okUps, ups = pcall(function()
+                                        return upvGet(value)
+                                end)
+                                if okUps and type(ups) == "table" then
+                                        for idx, upv in pairs(ups) do
+                                                local added = false
+                                                if upv == remoteCache then
+                                                        added = false
+                                                elseif upv == realRemote then
+                                                        if functionHasConstant(value, "FireServer") then
+                                                                table.insert(sites, { kind = "direct", fn = value, index = idx, original = upv })
+                                                                added = true
+                                                        end
+                                                elseif type(upv) == "table" then
+                                                        local okPairs, hits = pcall(function()
+                                                                local list = {}
+                                                                for key, val in pairs(upv) do
+                                                                        if val == realRemote then
+                                                                                list[#list + 1] = { key = key, root = val, original = val }
+                                                                        elseif typeof(val) == "Instance" and val ~= realRemote then
+                                                                                local okRemote, isUse = pcall(function()
+                                                                                        return val:IsA("RemoteEvent") and val.Name == "UseItem" and val:IsDescendantOf(game:GetService("ReplicatedStorage"))
+                                                                                end)
+                                                                                local okAnc, isAnc = pcall(function()
+                                                                                        return realRemote:IsDescendantOf(val)
+                                                                                end)
+                                                                                if (okRemote and isUse) or (okAnc and isAnc) then
+                                                                                        list[#list + 1] = { key = key, root = val, original = val }
+                                                                                end
+                                                                        end
+                                                                end
+                                                                return list
+                                                        end)
+                                                        if okPairs and type(hits) == "table" then
+                                                                for _, hit in ipairs(hits) do
+                                                                        table.insert(sites, { kind = "entry", tbl = upv, key = hit.key, root = hit.root, original = hit.original })
+                                                                        added = true
+                                                                end
+                                                        end
+                                                elseif typeof(upv) == "Instance" then
+                                                        local okAnc, isAnc = pcall(function()
+                                                                return upv ~= realRemote and realRemote:IsDescendantOf(upv)
+                                                        end)
+                                                        if okAnc and isAnc and functionHasConstant(value, "FireServer") then
+                                                                table.insert(sites, { kind = "direct-ancestor", fn = value, index = idx, root = upv, original = upv })
+                                                                added = true
+                                                        end
+                                                end
+                                                if added then
+                                                        break
+                                                end
+                                        end
+                                end
+                        end
+                        if #sites >= 8 then
+                                break
+                        end
+                end
+                return sites
+        end
+
+        local function installIntercept()
+                if sa.interceptInstalled then
+                        return true
+                end
+                if upvGet == nil or upvSet == nil or resolveRealFire() == nil then
+                        return false
+                end
+                ensureShotEnum()
+                local found = findUseItemRemote()
+                if found == nil then
+                        return nil
+                end
+                sa.useItem = found
+                local sites = buildSites(found)
+                local installedAny = false
+                for _, site in ipairs(sites) do
+                        local ok = false
                         pcall(function()
-                                local w = newcclosure(proxy)
-                                if type(w) == "function" then
-                                        wrapped = w
+                                if site.kind == "direct" then
+                                        upvSet(site.fn, site.index, makeFakeTree(site.original))
+                                        ok = true
+                                elseif site.kind == "entry" then
+                                        rawset(site.tbl, site.key, makeFakeTree(site.root))
+                                        ok = true
+                                elseif site.kind == "direct-ancestor" then
+                                        upvSet(site.fn, site.index, makeFakeTree(site.root))
+                                        ok = true
+                                end
+                        end)
+                        if ok then
+                                table.insert(sa.intercepts, site)
+                                installedAny = true
+                        end
+                end
+                if not installedAny then
+                        return false
+                end
+                sa.interceptInstalled = true
+                return true
+        end
+
+        local function uninstallIntercept()
+                for _, site in ipairs(sa.intercepts) do
+                        pcall(function()
+                                if site.kind == "direct" then
+                                        upvSet(site.fn, site.index, site.original)
+                                elseif site.kind == "entry" then
+                                        rawset(site.tbl, site.key, site.original)
+                                elseif site.kind == "direct-ancestor" then
+                                        upvSet(site.fn, site.index, site.original)
                                 end
                         end)
                 end
-                local ok, original = pcall(function()
-                        return hookfunction(found.FireServer, wrapped)
-                end)
-                if not ok or type(original) ~= "function" then
-                        return false
-                end
-                sa.originalFire = original
-                sa.hookInstalled = true
-                return true
+                table.clear(sa.intercepts)
+                sa.interceptInstalled = false
         end
 
         local function findUseItemRemoteImpl()
@@ -10746,12 +10919,19 @@ do
                         updateIndicator()
                         return
                 end
-                if not sa.hookInstalled and now - sa.hookTriedAt > 2 then
+                if not sa.interceptInstalled and sa.interceptFails < 3 and now - sa.hookTriedAt > 2 then
                         sa.hookTriedAt = now
-                        if installHook() and not sa.hookNotified then
-                                sa.hookNotified = true
-                                notify("silent aim ready - shots will redirect", 4)
-                        end
+                        task.spawn(function()
+                                local result = installIntercept()
+                                if result == true then
+                                        if not sa.hookNotified then
+                                                sa.hookNotified = true
+                                                notify("silent aim ready - shots will redirect", 4)
+                                        end
+                                elseif result == false then
+                                        sa.interceptFails += 1
+                                end
+                        end)
                 end
                 local center = Vector2.new(camera.ViewportSize.X / 2, camera.ViewportSize.Y / 2)
                 local target, hitbox = selectBest(camera, center, gun, camera.CFrame.Position)
@@ -10916,7 +11096,7 @@ do
                 sa.active = Toggles.silentaim_enabled.Value == true
                 if sa.active then
                         task.spawn(function()
-                                if installHook() and not sa.hookNotified then
+                                if installIntercept() == true and not sa.hookNotified then
                                         sa.hookNotified = true
                                         notify("silent aim ready - shots will redirect", 4)
                                 end
@@ -10940,10 +11120,8 @@ do
                                 indicator.gui:Destroy()
                         end
                 end)
-                if sa.hookInstalled and sa.useItem ~= nil and type(hookfunction) == "function" then
-                        pcall(function()
-                                hookfunction(sa.useItem.FireServer, sa.originalFire or h2oRawFireServer)
-                        end)
+                if sa.interceptInstalled then
+                        pcall(uninstallIntercept)
                 end
                 table.clear(sa.originByHitbox)
         end)
