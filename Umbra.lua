@@ -3,11 +3,6 @@ if getgenv().UmbraRebuild and getgenv().UmbraRebuild.Unload then
 end
 if not game:IsLoaded() then game.Loaded:Wait() end
 
--- Umbra anti-early-load: the DataModel being loaded is not enough. Startup
--- code below also touches the local player, its PlayerGui/Character and
--- Rivals' remotes, which can still be settling right after join/teleport.
--- Wait for those here. Every wait is capped so boot can never hang forever
--- on a missing instance (the menu still loads even if a cap is hit).
 do
     local Players = game:GetService("Players")
     local ReplicatedStorage = game:GetService("ReplicatedStorage")
@@ -33,10 +28,6 @@ end
 local K = { connections = {}, cleanups = {}, destroyed = false }
 getgenv().UmbraRebuild = K
 
--- Umbra folder bootstrap: executors that wipe their workspace lose the
--- folders the script writes into; unguarded writes then kill the boot
--- before the menu loads. Recreate the folder tree up front and expose a
--- recursive folder ensurer for every save path.
 do
     local folders = {
         "umbrarebuild",
@@ -16890,63 +16881,82 @@ local function fn37(arg, arg2)
 return v116.new(function(arg3)
 local str7 = string.format("%s/%s", "umbrarebuild/fonts", tostring(arg2.FileName))
 
+local settled = false
+
+local function settleErr(kind, msg)
+if not settled then
+settled = true
+arg3(v117.err("Fonts", kind, msg))
+end
+end
+
+task.spawn(function()
+local deadline = os.clock() + 6
+while not settled do
+if os.clock() >= deadline then
+settleErr("fetch", string.format("HttpGet timed out for %s", tostring(arg2.Url)))
+return
+end
+task.wait(0.05)
+end
+end)
+
+task.spawn(function()
+local v120, v121 = nil, nil
+
 if not isfile(str7) then
-local v120, v121 = v107(function()
+v120, v121 = v107(function()
 return game:HttpGet(arg2.Url)
 end)
 
 if not v120 or type(v121) ~= "string" then
-local v122 = tostring
-arg3(v117.err("Fonts", "fetch", string.format("HttpGet failed for %s: %s", tostring(arg2.Url), v122(v121))))
+settleErr("fetch", string.format("HttpGet failed for %s: %s", tostring(arg2.Url), tostring(v121)))
 return
 end
 
 local v122, v123 = v107(writefile, str7, v121)
 
 if not v122 then
-local v124 = tostring
-arg3(v117.err("Fonts", "write", string.format("writefile failed for %s: %s", tostring(str7), v124(v123))))
+settleErr("write", string.format("writefile failed for %s: %s", tostring(str7), tostring(v123)))
 return
 end
 end
 
-local v120, v121 = v107(getcustomasset, str7)
-local flag19 = not v120
+local v124, v125 = v107(getcustomasset, str7)
+local flag19 = not v124
 
 if not flag19 then
-local v122 = v86[165]
-flag19 = type(v121) ~= v122
+flag19 = type(v125) ~= v86[165]
 end
 
 if flag19 then
-local v122 = tostring
-arg3(v117.err("Fonts", "asset", string.format("getcustomasset failed for %s: %s", tostring(str7), v122(v121))))
+settleErr("asset", string.format("getcustomasset failed for %s: %s", tostring(str7), tostring(v125)))
 return
 end
 
 local tbl20 = {
 name = arg,
-faces = { { name = "Regular", weight = arg2.Weight.Value, style = fn36(arg2.Style), assetId = v121 } },
+faces = { { name = "Regular", weight = arg2.Weight.Value, style = fn36(arg2.Style), assetId = v125 } },
 }
 
 local str8 = string.format("%s/%s.json", "umbrarebuild/fonts", tostring(arg))
 local v122, v123 = v107(writefile, str8, v119:JSONEncode(tbl20))
 
 if not v122 then
-local v124 = tostring
-arg3(v117.err("Fonts", v86[166], string.format("writefile failed for %s: %s", tostring(str8), v124(v123))))
+settleErr(v86[166], string.format("writefile failed for %s: %s", tostring(str8), tostring(v123)))
 return
 end
 
 local v124, v125 = v107(getcustomasset, str8)
 
 if not v124 or type(v125) ~= "string" then
-local v126 = tostring
-arg3(v117.err(v86[104], v86[151], string.format("getcustomasset failed for %s: %s", tostring(str8), v126(v125))))
+settleErr(v86[151], string.format("getcustomasset failed for %s: %s", tostring(str8), tostring(v125)))
 return
 end
 
+settled = true
 arg3(v117.ok(Font.new(v125, arg2.Weight, arg2.Style)))
+end)
 end)
 end
 
@@ -16981,7 +16991,7 @@ end))
 end
 
 v116.all(tbl20):await()
-return flag19 and v117.VoidOk or v117.err("Fonts", "Initialize", "Failed to load all fonts")
+return v117.VoidOk
 end
 
 index2.Get = function(arg, arg2)
@@ -66325,8 +66335,19 @@ local generalState = arg.GeneralState
 local generalStateData = arg.GeneralStateData
 local v188 = v147:Add(v140.new())
 
-if not v188:ReportResult(v145:Initialize()).Ok then
+local fontInitFlag, fontInitVal = pcall(function()
+return v145:Initialize()
+end)
+
+if not fontInitFlag then
+pcall(function()
 v158.get():Notify("Some fonts may be unavailable")
+end)
+elseif fontInitVal ~= nil and not fontInitVal.Ok then
+v188:ReportResult(fontInitVal)
+pcall(function()
+v158.get():Notify("Some fonts may be unavailable")
+end)
 end
 
 local v189 = v147:Add(v126.new({
@@ -66483,6 +66504,13 @@ end)
 
 v239:Start()
 
+local menuBuilt = false
+task.delay(15, function()
+if not menuBuilt then
+warn("[Umbra] Menu build exceeded 15s - a download or asset fetch is stalling boot")
+end
+end)
+
 v186({
 Cosmetics = v237,
 CosmeticsConfig = v238,
@@ -66499,6 +66527,7 @@ GeneralState = generalState,
 GeneralStateData = generalStateData,
 PlayerIdentities = playerIdentities,
 })
+menuBuilt = true
 end
 end
 
@@ -66590,7 +66619,11 @@ end
 
 tbl17.b().use({ Report = function(_, e)
     local detail = type(e) == "table" and (e.Detail or e.Operation) or e
-    warn("[Umbra Rebuild] " .. tostring(detail))
+    local text = tostring(detail)
+    if string.find(text, "does not exist", 1, true) ~= nil and string.find(text, "cosmetics", 1, true) ~= nil then
+        return
+    end
+    warn("[Umbra Rebuild] " .. text)
 end })
 
 local boot = (function()
@@ -66617,16 +66650,6 @@ local boot = (function()
         end
     end
 
-    -- Umbra "Re-run After Teleport": when the active config has
-    -- AutoExecuteScript.Enabled, queue Umbra to re-execute from the GitHub
-    -- source after the next teleport. The queued payload first clears the
-    -- queued marker, settles for 5 seconds, then runs the full script -
-    -- whose anti-early-load gate waits out the new server before anything
-    -- loads. Every fresh boot re-queues while the flag is on, so hopping
-    -- keeps the chain alive indefinitely, and turning the toggle off ends
-    -- it on the next hop. The marker handoff below survives executors whose
-    -- getgenv() persists across teleports (the marker is cleared by the
-    -- payload the moment it is consumed, not by the new boot).
     do
         local ae = store.Data.AutoExecuteScript
         local wanted = typeof(ae) == "table" and ae.Enabled == true
