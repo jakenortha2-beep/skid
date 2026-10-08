@@ -66479,6 +66479,44 @@ local boot = (function()
         end
     end
 
+    -- Umbra "Re-run After Teleport": when the active config has
+    -- AutoExecuteScript.Enabled, queue Umbra to re-execute from the GitHub
+    -- source after the next teleport. The queued payload first clears the
+    -- queued marker, settles for 5 seconds, then runs the full script -
+    -- whose anti-early-load gate waits out the new server before anything
+    -- loads. Every fresh boot re-queues while the flag is on, so hopping
+    -- keeps the chain alive indefinitely, and turning the toggle off ends
+    -- it on the next hop. The marker handoff below survives executors whose
+    -- getgenv() persists across teleports (the marker is cleared by the
+    -- payload the moment it is consumed, not by the new boot).
+    do
+        local ae = store.Data.AutoExecuteScript
+        local wanted = typeof(ae) == "table" and ae.Enabled == true
+        local qot = K.fn("queue_on_teleport") or K.fn("queueonteleport")
+        if wanted and qot == nil then
+            warn("[Umbra] Re-run After Teleport is enabled but queue_on_teleport is unavailable")
+        end
+        if qot ~= nil then
+            local function arm()
+                if getgenv().UmbraRerunQueued then
+                    return
+                end
+                local ok = pcall(qot, 'getgenv().UmbraRerunQueued = false; local __ok, __err = pcall(function() task.wait(5); loadstring(game:HttpGet("https://raw.githubusercontent.com/jakenortha2-beep/skid/main/Umbra.lua"))() end); if not __ok then warn("[Umbra] Re-run after teleport failed: " .. tostring(__err)) end')
+                if ok then
+                    getgenv().UmbraRerunQueued = true
+                end
+            end
+            if wanted then
+                arm()
+            end
+            GlobalTrove:Connect(store:GetPropertyChangedSignal({ "AutoExecuteScript", "Enabled" }), function(enabled)
+                if enabled == true then
+                    arm()
+                end
+            end)
+        end
+    end
+
     local Theme = tbl17.A()
     local theme = store.Data.Theme
     if theme ~= nil then
