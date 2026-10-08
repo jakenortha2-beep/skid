@@ -53078,7 +53078,7 @@ end
 do
 local function fn35()
 tbl17.c_()
-return function(l,I,W)local N=W.Parent;local P,a=l:Check(I,W,N);if P then return true,I;end;P=W.Position-I;local e=P.Magnitude;local c,E=P/e,W.Size.Magnitude/2;local P,p=math.min(9.9,e-E),false;if a~=nil and P>0 and a.Distance<P then e=I+c*P;if l:Check(e,W,N)then return false,e;end;p=true;end;e=Vector3.yAxis;E=c:Cross(if math.abs(c:Dot(e))>0.99 then Vector3.xAxis else e).Unit;a,e=E:Cross(c).Unit,p and 6 or 7;for p=0,e-1,1 do P=math.tau*p/e;c=I+(E*math.cos(P)+a*math.sin(P))*9.9;if l:Check(c,W,N)then return false,c;end;end;return false,nil;end
+return function(l,I,W)local N=W.Parent;local P,a=l:Check(I,W,N);if P then return true,I;end;P=W.Position-I;local e=P.Magnitude;local c,E=P/e,W.Size.Magnitude/2;local step=math.min(9.9,e-E);if a~=nil and step>0 and a.Distance<step then local fr={1,0.75,0.5,0.25};for i=1,#fr,1 do local cand=I+c*step*fr[i];if l:Check(cand,W,N)then return false,cand;end;end;end;local up=Vector3.yAxis;local side=c:Cross(if math.abs(c:Dot(up))>0.99 then Vector3.xAxis else up).Unit;local other=side:Cross(c).Unit;local radii={9.9,6,3};for i=1,#radii,1 do for j=0,11,1 do local ang=math.tau*j/12;local cand=I+(side*math.cos(ang)+other*math.sin(ang))*radii[i];if l:Check(cand,W,N)then return false,cand;end;end;end;return false,nil;end
 end
 
 tbl17.gU = function()
@@ -53141,6 +53141,14 @@ if mode == "OnAllTargets" or arg8 and mode == "OnBestTarget" then
 local v135, v136 = v132(arg3, arg6, arg7)
 
 if not v135 then
+if v136 == nil then
+local toTarget = arg7.Position - arg6
+if toTarget.Magnitude > 0 then
+v136 = arg6 + toTarget.Unit * math.max(0.5, toTarget.Magnitude - arg7.Size.Magnitude / 2)
+else
+v136 = arg6
+end
+end
 obj[arg7] = v136
 end
 
