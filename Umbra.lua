@@ -33,6 +33,39 @@ end
 local K = { connections = {}, cleanups = {}, destroyed = false }
 getgenv().UmbraRebuild = K
 
+-- Umbra folder bootstrap: executors that wipe their workspace lose the
+-- folders the script writes into; unguarded writes then kill the boot
+-- before the menu loads. Recreate the folder tree up front and expose a
+-- recursive folder ensurer for every save path.
+do
+    local folders = {
+        "umbrarebuild",
+        "umbrarebuild/fonts",
+        "umbrarebuild/cache",
+        "umbrarebuild/rivals",
+        "umbrarebuild/rivals/cosmetics",
+        "umbrarebuild/rivals/cosmetics/states",
+        "umbrarebuild/rivals/esp_images",
+        "umbrarebuild/rivals/crosshair_textures",
+    }
+    function K.ensureFolder(path)
+        if type(path) ~= "string" or path == "" then return false end
+        if isfolder ~= nil and isfolder(path) then return true end
+        if makefolder == nil then return false end
+        local current = nil
+        for part in string.gmatch(path, "[^/\\]+") do
+            current = (current == nil) and part or (current .. "/" .. part)
+            if isfolder == nil or not isfolder(current) then
+                pcall(makefolder, current)
+            end
+        end
+        return isfolder ~= nil and isfolder(path) or false
+    end
+    for _, folder in ipairs(folders) do
+        pcall(K.ensureFolder, folder)
+    end
+end
+
 local Players = game:GetService("Players")
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
 local RunService = game:GetService("RunService")
@@ -1097,7 +1130,14 @@ local v121 = arg:ToJson(arg3)
 if not v121.Ok then
 return v115.err("ConfigManager", "SaveImpl", v121.Error.Detail)
 end
-writefile(v120, v121.Value)
+local saveFolder = v120:match("^(.*)[/\\][^/\\]+$")
+if saveFolder ~= nil and saveFolder ~= "" then
+pcall(K.ensureFolder, saveFolder)
+end
+local wrote, werr = v107(writefile, v120, v121.Value)
+if not wrote then
+return v115.err("ConfigManager", "SaveImpl", string.format("writefile failed for `%s`: %s", tostring(v120), tostring(werr)))
+end
 return v115.VoidOk
 end
 
@@ -66650,4 +66690,11 @@ function K.Unload()
     if getgenv().UmbraRebuild == K then getgenv().UmbraRebuild = nil end
 end
 
+do
+local booted, bootErr = pcall(function()
 tbl17.j1()(boot)
+end)
+if not booted then
+warn("[Umbra] Boot failed: " .. tostring(bootErr))
+end
+end
