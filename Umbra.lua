@@ -63385,6 +63385,7 @@ local v130 = ragebot:Add(v123.new(arg))
 local tbl18 = {
 _trove = ragebot,
 _enabled = false,
+_engineSafe = false,
 _lastTargetWorld = nil,
 _lastDefensiveViewAngles = nil,
 _playerContext = arg3,
@@ -63424,6 +63425,19 @@ arg._trove:Add(v118:ObserveEnabledKeybind({ "Ragebot" }, function(arg2)
 arg:SetEnabled(arg2)
 arg:_Reset()
 end))
+local teleportPlayer = cloneref(game:GetService("Players")).LocalPlayer
+if teleportPlayer ~= nil and teleportPlayer.OnTeleport ~= nil then
+arg._trove:Connect(teleportPlayer.OnTeleport, function()
+if not arg._enabled then
+return
+end
+v112(workspace, "FallenPartsDestroyHeight", fallenPartsDestroyHeight)
+v107(v108, "DFIntS2PhysicsSenderRate", "15")
+v107(v108, "DFIntAssemblyHistoryBufferSize", "15")
+v107(v108, "DFIntAssemblyHistorySkipSize", "8")
+arg._engineSafe = true
+end)
+end
 end
 
 index2.SetEnabled = function(arg, enabled)
@@ -63431,6 +63445,7 @@ if arg._enabled == enabled then
 return
 end
 arg._enabled = enabled
+arg._engineSafe = false
 v112(workspace, "FallenPartsDestroyHeight", enabled and (0/0) or fallenPartsDestroyHeight)
 v107(v108, "DFIntS2PhysicsSenderRate", enabled and "120" or "15")
 v107(v108, "DFIntAssemblyHistoryBufferSize", enabled and "2147483648" or "15")
@@ -63456,6 +63471,13 @@ local state = fighterState.Character.State
 if not state.Alive then
 arg:_Reset()
 return
+end
+if arg._engineSafe then
+arg._engineSafe = false
+v112(workspace, "FallenPartsDestroyHeight", 0/0)
+v107(v108, "DFIntS2PhysicsSenderRate", "120")
+v107(v108, "DFIntAssemblyHistoryBufferSize", "2147483648")
+v107(v108, "DFIntAssemblyHistorySkipSize", "0")
 end
 local characterController = innerContext.CharacterController
 local clientCFrame = characterController:GetClientCFrame()
