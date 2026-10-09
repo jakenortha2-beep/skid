@@ -66823,10 +66823,16 @@ function K.Unload()
 end
 
 do
-local booted, bootErr = pcall(function()
+local booted, bootErr = xpcall(function()
 tbl17.j1()(boot)
+end, function(err)
+local tb = tostring(err)
+if type(debug) == "table" and type(debug.traceback) == "function" then
+tb = tb .. "\n" .. debug.traceback("", 2)
+end
+return tb
 end)
 if not booted then
-warn("[Umbra] Boot failed: " .. tostring(bootErr))
+warn("[Umbra] Boot failed: " .. bootErr)
 end
 end
