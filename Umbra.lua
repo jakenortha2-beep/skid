@@ -1,3 +1,6 @@
+if type(getgenv) ~= "function" then
+    getgenv = function() return _G end
+end
 if getgenv().UmbraRebuild and getgenv().UmbraRebuild.Unload then
     pcall(getgenv().UmbraRebuild.Unload)
 end
