@@ -1108,6 +1108,26 @@ if v123 == nil then
 return v115.err("ConfigManager", "FromJson", "deserializer returned nil")
 end
 arg.Data = v123
+local defaultsRoot = tbl17.be()
+local function fillMissing(target, source)
+for key, value in source, nil, nil do
+local current = target[key]
+if current == nil then
+if type(value) == "table" then
+local clone = {}
+fillMissing(clone, value)
+target[key] = clone
+else
+target[key] = value
+end
+elseif type(current) == "table" and type(value) == "table" then
+fillMissing(current, value)
+end
+end
+end
+if type(defaultsRoot) == "table" then
+fillMissing(v123, defaultsRoot)
+end
 return v115.ok(v123)
 end
 
@@ -59023,7 +59043,7 @@ return ie.c
 end
 end
 do
-local function fn35() tbl17 .aE();local I,J= tbl17 .h6(), tbl17 .h6();local function l(W)I(W,"Enable Ragebot",{"Always","Toggle","Hold"},{"Ragebot"},true);W:AddToggle({Label="Prioritize Hackers",Config={"Ragebot","PrioritizeHackers"}});W:AddSlider({Label="Stability",Min=0,Max=1.5,Step=0.001,Config={"Ragebot","Stability"}});W:AddSlider({Label="Shoot Frames",Min=1,Max=5,Config={"Ragebot","ShootFrames"}});end;local function I(W)local N={"Primary","Secondary","Melee"};for P,P in N,nil,nil do W:AddToggle({Label=string.format("%s Enabled",tostring(P)),Config={"Ragebot","Weapons","Enabled",P}});end;W:AddOrderedList({Label="Weapon Priority",Items=N,Default=N,Config={"Ragebot","Weapons","Priority"}});W:AddDropdown({Label="On Empty",Options={"Reload","Swap","SwapOrReload"},Labels={SwapOrReload="Swap or Reload"},Config={"Ragebot","Weapons","OnEmpty"}});end;local function W(N,P)local a=N:AddGroup({Source=P,Option="ProjectileBreaker"});a:AddRangeSlider({Label="Forward Depth",Min=0,Max=10,Step=0.1,Config={"Ragebot","Evasion","ProjectileBreaker","DepthForward"}});a:AddSlider({Label="Forward Frequency",Min=0,Max=20,Step=0.1,Config={"Ragebot","Evasion","ProjectileBreaker","DepthForwardFrequency"}});a:AddRangeSlider({Label="Upward Depth",Min=0,Max=10,Step=0.1,Config={"Ragebot","Evasion","ProjectileBreaker","DepthUp"}});a:AddSlider({Label="Upward Frequency",Min=0,Max=20,Step=0.1,Config={"Ragebot","Evasion","ProjectileBreaker","DepthUpFrequency"}});a:AddSlider({Label="Reposition Interval (s)",Min=0.05,Max=2,Step=0.01,Config={"Ragebot","Evasion","ProjectileBreaker","RepositionInterval"}});a:AddToggle({Label="Fallback Character Origin",Config={"Ragebot","Evasion","ProjectileBreaker","FallbackAnchorFromCharacter"}});a:AddSlider({Label="Fallback Radius",Min=5,Max=100000000,Config={"Ragebot","Evasion","ProjectileBreaker","FallbackBaseRadius"}});a:AddSlider({Label="Fallback Random Factor",Min=0,Max=1,Step=0.1,Config={"Ragebot","Evasion","ProjectileBreaker","FallbackRadiusRandomFactor"}});end;local function N(P)local a=P:AddDropdown({Label="Evasion Mode",Options={"Off","Random","Translocate","ProjectileBreaker","Mimic"},Labels={ProjectileBreaker="Projectile Breaker"},Config={"Ragebot","Evasion","Mode"}});local e=P:AddGroup({Source=a,Option="Random"});e:AddToggle({Label="Character Origin",Config={"Ragebot","Evasion","Random","AnchorFromCharacter"}});e:AddSlider({Label="Base Radius",Min=5,Max=100000000,Config={"Ragebot","Evasion","Random","BaseRadius"}});e:AddSlider({Label="Random Factor",Min=0,Max=1,Step=0.1,Config={"Ragebot","Evasion","Random","RadiusRandomFactor"}});P:AddGroup({Source=a,Option="Translocate"}):AddSlider({Label="Offset",Min=-5,Max=5,Step=0.1,Config={"Ragebot","Evasion","Translocate","Offset"}});local a2=P:AddGroup({Source=a,Option="Mimic"});a2:AddSlider({Label="Jitter",Min=0,Max=2,Step=0.05,Config={"Ragebot","Evasion","Mimic","Jitter"}});a2:AddSlider({Label="Reposition Interval (s)",Min=0.05,Max=2,Step=0.01,Config={"Ragebot","Evasion","Mimic","RepositionInterval"}});a2:AddToggle({Label="Pendulum",Config={"Ragebot","Evasion","Mimic","Pendulum"}});W(P,a);end;return function(W)l(W:AddSection({Title="Activation",Side="left"}));I(W:AddSection({Title="Weapon Strategy",Side="left"}));N(W:AddSection({Title="Evasion",Side="right"}));local function D(P)J(P,"Enable Desync",{"Always","Toggle","Hold"},{"Ragebot","Desync"},true);P:AddDropdown({Label="Desync Style",Options={"Offset","Jitter","Choke"},Config={"Ragebot","Desync","Style"}});P:AddSlider({Label="Offset Distance",Min=0.5,Max=5,Step=0.1,Config={"Ragebot","Desync","Offset"}});P:AddSlider({Label="Jitter Radius",Min=0.5,Max=4,Step=0.1,Config={"Ragebot","Desync","JitterRadius"}});P:AddSlider({Label="Choke Duration (s)",Min=0.1,Max=0.6,Step=0.05,Config={"Ragebot","Desync","ChokeDuration"}});P:AddToggle({Label="Shoot Pulse",Config={"Ragebot","Desync","ShootPulse"}});end;return function(W)l(W:AddSection({Title="Activation",Side="left"}));I(W:AddSection({Title="Weapon Strategy",Side="left"}));N(W:AddSection({Title="Evasion",Side="right"}));D(W:AddSection({Title="Desync",Side="right"}));end;end
+local function fn35() tbl17 .aE();local I,J= tbl17 .h6(), tbl17 .h6();local function l(W)I(W,"Enable Ragebot",{"Always","Toggle","Hold"},{"Ragebot"},true);W:AddToggle({Label="Prioritize Hackers",Config={"Ragebot","PrioritizeHackers"}});W:AddSlider({Label="Stability",Min=0,Max=1.5,Step=0.001,Config={"Ragebot","Stability"}});W:AddSlider({Label="Shoot Frames",Min=1,Max=5,Config={"Ragebot","ShootFrames"}});end;local function I(W)local N={"Primary","Secondary","Melee"};for P,P in N,nil,nil do W:AddToggle({Label=string.format("%s Enabled",tostring(P)),Config={"Ragebot","Weapons","Enabled",P}});end;W:AddOrderedList({Label="Weapon Priority",Items=N,Default=N,Config={"Ragebot","Weapons","Priority"}});W:AddDropdown({Label="On Empty",Options={"Reload","Swap","SwapOrReload"},Labels={SwapOrReload="Swap or Reload"},Config={"Ragebot","Weapons","OnEmpty"}});end;local function W(N,P)local a=N:AddGroup({Source=P,Option="ProjectileBreaker"});a:AddRangeSlider({Label="Forward Depth",Min=0,Max=10,Step=0.1,Config={"Ragebot","Evasion","ProjectileBreaker","DepthForward"}});a:AddSlider({Label="Forward Frequency",Min=0,Max=20,Step=0.1,Config={"Ragebot","Evasion","ProjectileBreaker","DepthForwardFrequency"}});a:AddRangeSlider({Label="Upward Depth",Min=0,Max=10,Step=0.1,Config={"Ragebot","Evasion","ProjectileBreaker","DepthUp"}});a:AddSlider({Label="Upward Frequency",Min=0,Max=20,Step=0.1,Config={"Ragebot","Evasion","ProjectileBreaker","DepthUpFrequency"}});a:AddSlider({Label="Reposition Interval (s)",Min=0.05,Max=2,Step=0.01,Config={"Ragebot","Evasion","ProjectileBreaker","RepositionInterval"}});a:AddToggle({Label="Fallback Character Origin",Config={"Ragebot","Evasion","ProjectileBreaker","FallbackAnchorFromCharacter"}});a:AddSlider({Label="Fallback Radius",Min=5,Max=100000000,Config={"Ragebot","Evasion","ProjectileBreaker","FallbackBaseRadius"}});a:AddSlider({Label="Fallback Random Factor",Min=0,Max=1,Step=0.1,Config={"Ragebot","Evasion","ProjectileBreaker","FallbackRadiusRandomFactor"}});end;local function N(P)local a=P:AddDropdown({Label="Evasion Mode",Options={"Off","Random","Translocate","ProjectileBreaker","Mimic"},Labels={ProjectileBreaker="Projectile Breaker"},Config={"Ragebot","Evasion","Mode"}});local e=P:AddGroup({Source=a,Option="Random"});e:AddToggle({Label="Character Origin",Config={"Ragebot","Evasion","Random","AnchorFromCharacter"}});e:AddSlider({Label="Base Radius",Min=5,Max=100000000,Config={"Ragebot","Evasion","Random","BaseRadius"}});e:AddSlider({Label="Random Factor",Min=0,Max=1,Step=0.1,Config={"Ragebot","Evasion","Random","RadiusRandomFactor"}});P:AddGroup({Source=a,Option="Translocate"}):AddSlider({Label="Offset",Min=-5,Max=5,Step=0.1,Config={"Ragebot","Evasion","Translocate","Offset"}});local a2=P:AddGroup({Source=a,Option="Mimic"});a2:AddSlider({Label="Jitter",Min=0,Max=2,Step=0.05,Config={"Ragebot","Evasion","Mimic","Jitter"}});a2:AddSlider({Label="Reposition Interval (s)",Min=0.05,Max=2,Step=0.01,Config={"Ragebot","Evasion","Mimic","RepositionInterval"}});a2:AddToggle({Label="Pendulum",Config={"Ragebot","Evasion","Mimic","Pendulum"}});W(P,a);end;return function(W)local function D(P)J(P,"Enable Desync",{"Always","Toggle","Hold"},{"Ragebot","Desync"},true);P:AddDropdown({Label="Desync Style",Options={"Offset","Jitter","Choke"},Config={"Ragebot","Desync","Style"}});P:AddSlider({Label="Offset Distance",Min=0.5,Max=5,Step=0.1,Config={"Ragebot","Desync","Offset"}});P:AddSlider({Label="Jitter Radius",Min=0.5,Max=4,Step=0.1,Config={"Ragebot","Desync","JitterRadius"}});P:AddSlider({Label="Choke Duration (s)",Min=0.1,Max=0.6,Step=0.05,Config={"Ragebot","Desync","ChokeDuration"}});P:AddToggle({Label="Shoot Pulse",Config={"Ragebot","Desync","ShootPulse"}});end;l(W:AddSection({Title="Activation",Side="left"}));I(W:AddSection({Title="Weapon Strategy",Side="left"}));N(W:AddSection({Title="Evasion",Side="right"}));D(W:AddSection({Title="Desync",Side="right"}));end;end
 
 tbl17.ih = function()
 local ih = tbl17.cache.ih
@@ -63486,7 +63506,7 @@ arg._trove:Add(v118:ObserveEnabledKeybind({ "Ragebot" }, function(arg2)
 arg:SetEnabled(arg2)
 arg:_Reset()
 end))
-arg._trove:Add(v118:ObserveEnabledKeybind({ "Ragebot", "Desync" }, function(arg2)
+local okDesync, desyncBridge = v107(v118.ObserveEnabledKeybind, v118, { "Ragebot", "Desync" }, function(arg2)
 arg._desyncEnabled = arg2
 arg._desyncOffset = nil
 if not arg2 and arg._desyncChokeActive then
@@ -63495,7 +63515,10 @@ if arg._enabled then
 v107(v108, "DFIntS2PhysicsSenderRate", "120")
 end
 end
-end))
+end)
+if okDesync and desyncBridge then
+arg._trove:Add(desyncBridge)
+end
 local teleportPlayer = cloneref(game:GetService("Players")).LocalPlayer
 if teleportPlayer ~= nil and teleportPlayer.OnTeleport ~= nil then
 arg._trove:Connect(teleportPlayer.OnTeleport, function()
